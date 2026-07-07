@@ -407,99 +407,48 @@ def get_hourly_pattern(history_df, feature_cols):
     return pattern
 
 
-def get_theme_colors():
-    """Mendapatkan warna berdasarkan tema yang dipilih"""
-    theme = st.get_option("theme.base")
-    
-    if theme == "dark":
-        return {
-            "bg_primary": "#0e1117",
-            "bg_secondary": "#1e2128",
-            "bg_card": "#262730",
-            "bg_hover": "#2e3038",
-            "text_primary": "#fafafa",
-            "text_secondary": "#a0a0a0",
-            "text_muted": "#6c6c6c",
-            "border": "#3a3a3a",
-            "border_light": "#4a4a4a",
-            "shadow": "0 4px 20px rgba(0,0,0,0.4)",
-            "shadow_hover": "0 8px 30px rgba(0,0,0,0.6)",
-            "gradient": "linear-gradient(135deg, #1e2128 0%, #262730 100%)",
-            "chip_bg": "#2e3038",
-            "chip_border": "#3a3a3a",
-            "table_header_bg": "#1e2128",
-            "table_border": "#3a3a3a",
-            "info_bg": "#1e2128",
-            "info_border": "#3a3a3a",
-            "section_color": "#fafafa"
-        }
-    else:
-        return {
-            "bg_primary": "#ffffff",
-            "bg_secondary": "#f8fafc",
-            "bg_card": "#ffffff",
-            "bg_hover": "#f0f4f8",
-            "text_primary": "#1a2634",
-            "text_secondary": "#4a5661",
-            "text_muted": "#8894a0",
-            "border": "#e6eef5",
-            "border_light": "#dce5ed",
-            "shadow": "0 4px 20px rgba(0,0,0,0.04)",
-            "shadow_hover": "0 8px 30px rgba(0,0,0,0.08)",
-            "gradient": "linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)",
-            "chip_bg": "#f4f8fc",
-            "chip_border": "#e5edf5",
-            "table_header_bg": "#f8fafc",
-            "table_border": "#e6eef5",
-            "info_bg": "#f8fafc",
-            "info_border": "#e6eef5",
-            "section_color": "#1a2634"
-        }
-
-
-def inject_custom_css(theme_colors):
+def inject_custom_css():
     """CSS untuk kartu 'Saat Ini' dan strip per-jam bergaya widget cuaca."""
-    st.markdown(f"""
+    st.markdown("""
     <style>
     /* Global Styles */
-    .main-header {{
+    .main-header {
         font-size: 2.5rem;
         font-weight: 800;
-        color: {theme_colors["text_primary"]};
+        color: #1a2634;
         margin-bottom: 0.25rem;
         letter-spacing: -0.5px;
-    }}
+    }
     
-    .sub-header {{
-        color: {theme_colors["text_secondary"]};
+    .sub-header {
+        color: #6b7a8a;
         font-size: 1rem;
         margin-bottom: 2rem;
-        border-bottom: 2px solid {theme_colors["border"]};
+        border-bottom: 2px solid #f0f4f8;
         padding-bottom: 1rem;
-    }}
+    }
     
     /* Main Card */
-    .wx-card {{
+    .wx-card {
         display: flex;
         align-items: center;
         gap: 28px;
         flex-wrap: wrap;
         padding: 28px 32px;
         border-radius: 24px;
-        border: 1px solid {theme_colors["border"]};
-        background: {theme_colors["gradient"]};
-        box-shadow: {theme_colors["shadow"]};
+        border: 1px solid #e6eef5;
+        background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+        box-shadow: 0 4px 20px rgba(0,0,0,0.04);
         margin-bottom: 8px;
         transition: all 0.3s ease;
-    }}
+    }
     
-    .wx-card:hover {{
-        box-shadow: {theme_colors["shadow_hover"]};
+    .wx-card:hover {
+        box-shadow: 0 8px 30px rgba(0,0,0,0.08);
         transform: translateY(-2px);
-        border-color: {theme_colors["border_light"]};
-    }}
+    }
     
-    .wx-icon-circle {{
+    .wx-icon-circle {
         width: 96px;
         height: 96px;
         min-width: 96px;
@@ -508,253 +457,251 @@ def inject_custom_css(theme_colors):
         align-items: center;
         justify-content: center;
         font-size: 44px;
-        background: {theme_colors["chip_bg"]};
-        border: 3px solid {theme_colors["border"]};
+        background: #f0f4f8;
+        border: 3px solid #e0e8ef;
         transition: all 0.3s ease;
-    }}
+    }
     
-    .wx-main {{ flex: 1; min-width: 240px; }}
+    .wx-main { flex: 1; min-width: 240px; }
     
-    .wx-label {{
+    .wx-label {
         font-size: 12px;
         font-weight: 700;
         letter-spacing: 1.5px;
-        color: {theme_colors["text_muted"]};
+        color: #8894a0;
         text-transform: uppercase;
         margin-bottom: 4px;
-    }}
+    }
     
-    .wx-value {{ 
+    .wx-value { 
         font-size: 44px; 
         font-weight: 800; 
-        color: {theme_colors["text_primary"]}; 
+        color: #1b2733; 
         line-height: 1.1;
-    }}
+    }
     
-    .wx-unit {{ 
+    .wx-unit { 
         font-size: 18px; 
         font-weight: 600; 
-        color: {theme_colors["text_secondary"]}; 
+        color: #4a5661; 
         margin-left: 4px; 
-    }}
+    }
     
-    .wx-cat {{ 
+    .wx-cat { 
         font-size: 18px; 
         font-weight: 600; 
         margin-left: 14px; 
-    }}
+    }
     
-    .wx-loc {{ 
+    .wx-loc { 
         font-size: 15px; 
-        color: {theme_colors["text_secondary"]}; 
+        color: #6b7684; 
         margin-left: 8px; 
-    }}
+    }
     
-    .wx-meta {{ 
+    .wx-meta { 
         font-size: 12.5px; 
-        color: {theme_colors["text_muted"]}; 
+        color: #8894a0; 
         margin-top: 4px; 
-    }}
+    }
     
-    .wx-chip-row {{ 
+    .wx-chip-row { 
         display: flex; 
         flex-wrap: wrap; 
         gap: 10px; 
         margin-top: 16px; 
-    }}
+    }
     
-    .wx-chip {{
-        background: {theme_colors["chip_bg"]};
-        border: 1px solid {theme_colors["chip_border"]};
+    .wx-chip {
+        background: #f4f8fc;
+        border: 1px solid #e5edf5;
         border-radius: 24px;
         padding: 7px 16px;
         font-size: 13.5px;
-        color: {theme_colors["text_secondary"]};
+        color: #4a5661;
         white-space: nowrap;
         transition: all 0.2s ease;
-    }}
+    }
     
-    .wx-chip:hover {{
-        background: {theme_colors["bg_hover"]};
+    .wx-chip:hover {
+        background: #e8f0f8;
         transform: scale(1.02);
-    }}
+    }
     
-    .wx-chip b {{ color: {theme_colors["text_primary"]}; }}
+    .wx-chip b { color: #1b2733; }
     
     /* Metric Cards */
-    .metric-card {{
-        background: {theme_colors["bg_card"]};
-        border: 1px solid {theme_colors["border"]};
+    .metric-card {
+        background: white;
+        border: 1px solid #e6eef5;
         border-radius: 16px;
         padding: 20px;
         text-align: center;
-        box-shadow: {theme_colors["shadow"]};
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
         transition: all 0.3s ease;
         height: 100%;
-    }}
+    }
     
-    .metric-card:hover {{
-        box-shadow: {theme_colors["shadow_hover"]};
+    .metric-card:hover {
+        box-shadow: 0 6px 20px rgba(0,0,0,0.08);
         transform: translateY(-3px);
-        border-color: {theme_colors["border_light"]};
-    }}
+    }
     
-    .metric-card .label {{
+    .metric-card .label {
         font-size: 0.8rem;
-        color: {theme_colors["text_muted"]};
+        color: #8894a0;
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.5px;
         margin-bottom: 8px;
-    }}
+    }
     
-    .metric-card .value {{
+    .metric-card .value {
         font-size: 2rem;
         font-weight: 800;
-        color: {theme_colors["text_primary"]};
-    }}
+        color: #1b2733;
+    }
     
-    .metric-card .sub {{
+    .metric-card .sub {
         font-size: 0.75rem;
-        color: {theme_colors["text_muted"]};
+        color: #8894a0;
         margin-top: 4px;
-    }}
+    }
     
     /* Hourly Strip */
-    .hourly-wrap {{ 
+    .hourly-wrap { 
         overflow-x: auto; 
         padding-bottom: 6px; 
         margin: 8px 0;
-    }}
+    }
     
-    .hourly-table {{ 
+    .hourly-table { 
         border-collapse: collapse; 
         min-width: 100%;
-        background: {theme_colors["bg_card"]};
+        background: white;
         border-radius: 12px;
         overflow: hidden;
-        box-shadow: {theme_colors["shadow"]};
-    }}
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
     
-    .hourly-table td {{
+    .hourly-table td {
         text-align: center;
         padding: 10px 16px;
         font-size: 13px;
         white-space: nowrap;
         vertical-align: middle;
-        border-bottom: 1px solid {theme_colors["table_border"]};
-        color: {theme_colors["text_secondary"]};
-    }}
+        border-bottom: 1px solid #f0f4f8;
+    }
     
-    .hourly-table tr:last-child td {{
+    .hourly-table tr:last-child td {
         border-bottom: none;
-    }}
+    }
     
-    .hourly-table td:first-child {{
+    .hourly-table td:first-child {
         position: sticky;
         left: 0;
-        background: {theme_colors["table_header_bg"]};
+        background: #f8fafc;
         text-align: left;
         font-size: 11px;
         font-weight: 700;
         letter-spacing: 0.5px;
-        color: {theme_colors["text_muted"]};
+        color: #8894a0;
         text-transform: uppercase;
         min-width: 128px;
         z-index: 2;
-        border-right: 1px solid {theme_colors["border"]};
-    }}
+        border-right: 1px solid #e6eef5;
+    }
     
-    .hourly-date {{ 
+    .hourly-date { 
         font-weight: 700 !important; 
         font-size: 12.5px !important; 
-        color: {theme_colors["text_primary"]} !important; 
+        color: #1b2733 !important; 
         text-align: left !important; 
-    }}
+    }
     
-    .hourly-hour {{ 
-        color: {theme_colors["text_muted"]}; 
+    .hourly-hour { 
+        color: #8894a0; 
         font-size: 12px; 
-    }}
+    }
     
-    .hourly-icon {{ 
+    .hourly-icon { 
         font-size: 24px; 
-    }}
+    }
     
-    .hourly-val {{ 
+    .hourly-val { 
         font-weight: 700; 
         font-size: 15px; 
-        color: {theme_colors["text_primary"]}; 
-    }}
+        color: #1b2733; 
+    }
     
-    .hourly-sub {{ 
-        color: {theme_colors["text_secondary"]}; 
+    .hourly-sub { 
+        color: #5d6875; 
         font-size: 12.5px; 
-    }}
+    }
     
     /* Section Headers */
-    .section-header {{
+    .section-header {
         font-size: 1.5rem;
         font-weight: 700;
-        color: {theme_colors["section_color"]};
+        color: #1a2634;
         margin-top: 2rem;
         margin-bottom: 1rem;
         display: flex;
         align-items: center;
         gap: 12px;
-    }}
+    }
     
-    .section-header span {{
+    .section-header span {
         font-size: 1.8rem;
-    }}
+    }
     
     /* Info Box */
-    .info-box {{
-        background: {theme_colors["info_bg"]};
-        border: 1px solid {theme_colors["info_border"]};
+    .info-box {
+        background: #f8fafc;
+        border: 1px solid #e6eef5;
         border-radius: 12px;
         padding: 16px 20px;
         margin-top: 16px;
-    }}
+    }
     
-    .info-box .title {{
+    .info-box .title {
         font-weight: 600;
-        color: {theme_colors["text_primary"]};
+        color: #1b2733;
         margin-bottom: 4px;
-    }}
+    }
     
-    .info-box .content {{
-        color: {theme_colors["text_secondary"]};
+    .info-box .content {
+        color: #6b7a8a;
         font-size: 0.9rem;
         line-height: 1.6;
-    }}
+    }
     
     /* Responsive */
-    @media (max-width: 768px) {{
-        .wx-card {{
+    @media (max-width: 768px) {
+        .wx-card {
             flex-direction: column;
             align-items: flex-start;
             padding: 20px;
-        }}
+        }
         
-        .wx-value {{
+        .wx-value {
             font-size: 32px;
-        }}
+        }
         
-        .metric-card .value {{
+        .metric-card .value {
             font-size: 1.5rem;
-        }}
+        }
         
-        .hourly-table td {{
+        .hourly-table td {
             padding: 8px 12px;
             font-size: 12px;
-        }}
-    }}
+        }
+    }
     </style>
     """, unsafe_allow_html=True)
 
 
-def render_current_card(latest_data, ts_formatted, theme_colors):
+def render_current_card(latest_data, ts_formatted):
     """Kartu 'Saat Ini' bergaya widget cuaca: ikon kategori besar + chip info."""
     category = latest_data.get("category", "Baik")
     color = CATEGORY_COLOR.get(category, "#95a5a6")
@@ -790,7 +737,7 @@ def render_current_card(latest_data, ts_formatted, theme_colors):
     """, unsafe_allow_html=True)
 
 
-def render_metric_cards(data, category, theme_colors):
+def render_metric_cards(data, category):
     """Render metric cards for additional data points."""
     cols = st.columns(5)
     
@@ -804,18 +751,15 @@ def render_metric_cards(data, category, theme_colors):
     
     for idx, (label, value, unit, color) in enumerate(metrics):
         with cols[idx]:
-            bg_color = f"{color}15" if theme_colors["bg_primary"] == "#ffffff" else f"{color}30"
-            text_color = color if theme_colors["bg_primary"] == "#ffffff" else color
-            
             st.markdown(f"""
             <div class="metric-card">
                 <div class="label">{label}</div>
-                <div class="value" style="color:{text_color};">{value} {unit}</div>
+                <div class="value" style="color:{color};">{value} {unit}</div>
             </div>
             """, unsafe_allow_html=True)
 
 
-def render_hourly_strip(df, title, key_prefix, theme_colors, page_size=8):
+def render_hourly_strip(df, title, key_prefix, page_size=8):
     """
     Strip horizontal per jam gaya 'Prakiraan per Jam': kategori, PM2.5, suhu, kelembapan,
     dengan navigasi ‹ ›. Timestamp dikonversi ke WIB (UTC+7) untuk ditampilkan; df["timestamp"]
@@ -823,7 +767,7 @@ def render_hourly_strip(df, title, key_prefix, theme_colors, page_size=8):
     """
     header_col, prev_col, next_col = st.columns([8, 1, 1])
     with header_col:
-        st.markdown(f'<div style="font-size:1.1rem; font-weight:600; color:{theme_colors["text_primary"]};">{title}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:1.1rem; font-weight:600; color:#1a2634;">{title}</div>', unsafe_allow_html=True)
 
     if df is None or df.empty:
         st.info("Tidak ada data untuk ditampilkan.")
@@ -872,7 +816,7 @@ def render_hourly_strip(df, title, key_prefix, theme_colors, page_size=8):
         date_cells += f'<td class="hourly-date">{date_html}</td>'
         hour_cells += f'<td class="hourly-hour">{hour_str}</td>'
         icon_cells += f'<td class="hourly-icon" title="{cat}">{emoji}</td>'
-        val_cells += f'<td class="hourly-val">{pm25:.0f}<br><span style="font-weight:400;color:{theme_colors["text_muted"]};font-size:10.5px;">µg/m³</span></td>'
+        val_cells += f'<td class="hourly-val">{pm25:.0f}<br><span style="font-weight:400;color:#8894a0;font-size:10.5px;">µg/m³</span></td>'
         temp_cells += f'<td class="hourly-sub">{temp:.0f}°C</td>'
         hum_cells += f'<td class="hourly-sub">{hum:.0f}%</td>'
 
@@ -892,17 +836,31 @@ def render_hourly_strip(df, title, key_prefix, theme_colors, page_size=8):
     st.caption(f"Menampilkan jam ke-{start + 1}–{min(end, total)} dari {total} · waktu dalam WIB (UTC+7)")
 
 
+def display_metric_card(title, value, unit, color):
+    st.markdown(f"""
+    <div style='
+        background: {color}15;
+        padding: 15px;
+        border-radius: 10px;
+        border-left: 4px solid {color};
+        text-align: center;
+    '>
+        <div style='font-size: 0.8rem; color: #888;'>{title}</div>
+        <div style='font-size: 1.8rem; font-weight: bold; color: {color};'>
+            {value:.1f} {unit}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
 def main():
     global recent_data, history_data
     
-    # Get theme colors
-    theme_colors = get_theme_colors()
-    
-    # Custom CSS dengan tema
-    inject_custom_css(theme_colors)
+    # Custom CSS
+    inject_custom_css()
     
     # Header
-    st.markdown(f'<div class="main-header">🌤️ Dashboard Kualitas Udara Malang</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">🌤️ Dashboard Kualitas Udara Malang</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="sub-header">📍 {LOCATION["name"]} · Update data setiap 1 jam dari OpenAQ</div>', unsafe_allow_html=True)
     
     # Start streaming
@@ -985,16 +943,16 @@ def main():
         ts_display = ts
     
     # ============ RECENT DATA ============
-    st.markdown(f'<div class="section-header"><span>📊</span> Data Real-time</div>', unsafe_allow_html=True)
-    render_current_card(latest_data, ts_formatted, theme_colors)
+    st.markdown('<div class="section-header"><span>📊</span> Data Real-time</div>', unsafe_allow_html=True)
+    render_current_card(latest_data, ts_formatted)
     
     # Metric Cards
-    render_metric_cards(latest_data, kategori, theme_colors)
+    render_metric_cards(latest_data, kategori)
     
     st.markdown("---")
     
     # ============ HISTORIS PER JAM ============
-    st.markdown(f'<div class="section-header"><span>📈</span> Historis 24 Jam</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header"><span>📈</span> Historis 24 Jam</div>', unsafe_allow_html=True)
 
     if history_data and len(history_data) > 0:
         df_hist = pd.DataFrame(history_data)
@@ -1016,7 +974,7 @@ def main():
                 categories.append(cat)
             df_hist['category'] = categories
 
-            render_hourly_strip(df_hist, "Historis 24 Jam Terakhir (WIB)", key_prefix="hist", theme_colors=theme_colors)
+            render_hourly_strip(df_hist, "Historis 24 Jam Terakhir (WIB)", key_prefix="hist")
 
             col1, col2, col3, col4 = st.columns(4)
             with col1:
@@ -1036,7 +994,7 @@ def main():
     st.markdown("---")
     
     # ============ PREDIKSI PER JAM ============
-    st.markdown(f'<div class="section-header"><span>🔮</span> Prediksi 24 Jam</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header"><span>🔮</span> Prediksi 24 Jam</div>', unsafe_allow_html=True)
     with st.expander("ℹ️ Tentang Prediksi", expanded=False):
         st.markdown("""
         **Bagaimana prediksi dibuat?**
@@ -1091,11 +1049,11 @@ def main():
     df_future = pd.DataFrame(future_data)
     df_future['timestamp'] = pd.to_datetime(df_future['timestamp'], utc=True).dt.tz_localize(None)
 
-    render_hourly_strip(df_future, "Prediksi 24 Jam Ke Depan (WIB)", key_prefix="future", theme_colors=theme_colors, page_size=8)
+    render_hourly_strip(df_future, "Prediksi 24 Jam Ke Depan (WIB)", key_prefix="future", page_size=8)
     
     # ============ RINGKASAN ============
     st.markdown("---")
-    st.markdown(f'<div class="section-header"><span>📋</span> Ringkasan</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header"><span>📋</span> Ringkasan</div>', unsafe_allow_html=True)
     
     col1, col2, col3, col4 = st.columns(4)
     
