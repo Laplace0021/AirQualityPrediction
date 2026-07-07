@@ -897,4 +897,191 @@ def main():
         st.warning("⚠️ Belum ada data dari OpenAQ. Tunggu update berikutnya.")
         
         # Tampilkan status sensor
-        with st.expander
+        with st.expander("🔍 Status Sensor", expanded=True):
+            stream = OpenAQStream(OPENAQ_API_KEY)
+            sensors = stream.discover_sensors()
+            if sensors:
+                st.success(f"✅ Ditemukan {len(sensors)} sensor!")
+                for param, sid in sensors.items():
+                    st.write(f"- {param}: sensor_id={sid}")
+
+                st.write("**Mencoba ambil & gabungkan data measurement...**")
+                recent_try, historical_try = stream.fetch_all_data()
+                st.write("**Detail debug fetch:**")
+                st.json(stream.last_debug)
+
+                if not historical_try:
+                    st.error("❌ Sensor ditemukan, tapi belum berhasil menggabungkan data measurement jadi baris historis.")
+                else:
+                    st.success(f"✅ Berhasil menggabungkan {len(historical_try)} baris data per jam.")
+            else:
+                st.error("❌ Tidak ditemukan sensor di lokasi Malang")
+                st.write("**Detail debug:**")
+                st.json(stream.last_debug)
+                st.caption(
+                    "Cek: status code 401/403 → API key tidak valid atau perlu re-generate di "
+                    "explore.openaq.org. Status 200 tapi locations_found=0 → tidak ada lokasi "
+                    "OpenAQ dalam radius yang ditentukan (coba perbesar LOCATION['radius'])."
+                )
+        st.stop()
+    
+    # Prediksi kategori
+    kategori = predict(spark, model, latest_data)
+    latest_data["category"] = kategori
+    
+    # ============ FORMAT TIMESTAMP ============
+    ts = latest_data.get('timestamp', 'N/A')
+    try:
+        # latest_data["timestamp"] naive dan merepresentasikan UTC (lihat get_anchor_data),
+        # jadi tambahkan +7 jam supaya tampil sesuai WIB, konsisten dengan strip per-jam.
+        dt_utc = pd.to_datetime(ts)
+        dt_wib = dt_utc + timedelta(hours=7)
+        ts_formatted = dt_wib.strftime('%d %b %Y, %H:%M')
+        ts_display = dt_wib.strftime('%Y-%m-%d %H:%M')
+    except Exception:
+        ts_formatted = ts
+        ts_display = ts
+    
+    # ============ RECENT DATA ============
+    st.markdown('<div class="section-header"><span>📊</span> Data Real-time</div>', unsafe_allow_html=True)
+    render_current_card(latest_data, ts_formatted)
+    
+    # Metric Cards
+    render_metric_cards(latest_data, kategori)
+    
+    st.markdown("---")
+    
+    # ============ HISTORIS PER JAM ============
+    st.markdown('<div class="section-header"><span>📈</span> Historis 24 Jam</div>', unsafe_allow_html=True)
+
+    if history_data and len(history_data) > 0:
+        df_hist = pd.DataFrame(history_data)
+        # utc=True + tz_localize(None): samakan dengan get_anchor_data() supaya tidak
+        # crash "Invalid comparison" saat dibandingkan dengan anchor_ts/cutoff di bawah.
+        df_hist['timestamp'] = pd.to_datetime(df_hist['timestamp'], utc=True).dt.tz_localize(None)
+        df_hist = df_hist.sort_values('timestamp')
+
+        # Ambil 24 jam ke belakang berdasarkan anchor time (bukan max data historis)
+        anchor_ts = pd.to_datetime(latest_data["timestamp"])
+        cutoff = anchor_ts - timedelta(hours=24)
+        df_hist = df_hist[(df_hist['timestamp'] >= cutoff) & (df_hist['timestamp'] <= anchor_ts)].copy()
+
+        if len(df_hist) > 0:
+            # Prediksi kategori untuk historis
+            categories = []
+            for _, row in df_hist.iterrows():
+                cat = predict(spark, model, row.to_dict())
+                categories.append(cat)
+            df_hist['category'] = categories
+
+            render_hourly_strip(df_hist, "Historis 24 Jam Terakhir (WIB)", key_prefix="hist")
+
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Rata-rata PM2.5", f"{df_hist['pm25'].mean():.1f} µg/m³")
+            with col2:
+                st.metric("Min - Max PM2.5", f"{df_hist['pm25'].min():.1f} - {df_hist['pm25'].max():.1f} µg/m³")
+            with col3:
+                most_common = df_hist['category'].mode()[0] if not df_hist['category'].empty else "N/A"
+                st.metric("Kategori Dominan", most_common)
+            with col4:
+                st.metric("Total Data", f"{len(df_hist)} jam")
+        else:
+            st.info("⏳ Belum cukup data historis (minimal 24 jam)")
+    else:
+        st.info("⏳ Menunggu data historis...")
+
+    st.markdown("---")
+    
+    # ============ PREDIKSI PER JAM ============
+    st.markdown('<div class="section-header"><span>🔮</span> Prediksi 24 Jam</div>', unsafe_allow_html=True)
+    with st.expander("ℹ️ Tentang Prediksi", expanded=False):
+        st.markdown("""
+        **Bagaimana prediksi dibuat?**
+        
+        Fitur (PM2.5, PM1, suhu, kelembapan, um003) untuk tiap jam ke depan diestimasi dari 
+        pola nilai per jam-dalam-hari pada data historis yang tersedia (bukan angka acak). 
+        Random Forest kemudian mengklasifikasikan kategori ISPU dari fitur hasil estimasi tersebut — 
+        sesuai fungsi aslinya sebagai model klasifikasi, bukan regresi PM2.5.
+        """)
+
+    anchor_ts = pd.to_datetime(latest_data["timestamp"])
+    feature_cols = ["pm1", "pm25", "relativehumidity", "temperature", "um003"]
+
+    hourly_pattern = None
+    if history_data:
+        df_pattern_src = pd.DataFrame(history_data)
+        df_pattern_src["timestamp"] = pd.to_datetime(df_pattern_src["timestamp"], utc=True).dt.tz_localize(None)
+        available_cols = [c for c in feature_cols if c in df_pattern_src.columns]
+        if available_cols:
+            hourly_pattern = get_hourly_pattern(df_pattern_src, available_cols)
+
+    future_data = []
+    for i in range(1, 25):
+        future_time = anchor_ts + timedelta(hours=i)
+        target_hour = future_time.hour
+
+        if hourly_pattern is not None:
+            # Estimasi fitur dari pola historis pada jam yang sama
+            base = hourly_pattern.loc[target_hour]
+            future = {
+                "timestamp": future_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "pm1": max(0, base.get("pm1", latest_data.get("pm1", 10))),
+                "pm25": max(0, base.get("pm25", latest_data.get("pm25", 15))),
+                "relativehumidity": max(0, min(100, base.get("relativehumidity", latest_data.get("relativehumidity", 65)))),
+                "temperature": max(0, min(45, base.get("temperature", latest_data.get("temperature", 27)))),
+                "um003": max(0, base.get("um003", latest_data.get("um003", 300))),
+            }
+        else:
+            # Fallback kalau data historis belum cukup: persistence dari data terakhir
+            future = {
+                "timestamp": future_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "pm1": latest_data.get("pm1", 10),
+                "pm25": latest_data.get("pm25", 15),
+                "relativehumidity": latest_data.get("relativehumidity", 65),
+                "temperature": latest_data.get("temperature", 27),
+                "um003": latest_data.get("um003", 300),
+            }
+
+        future["category"] = predict(spark, model, future)
+        future_data.append(future)
+    
+    df_future = pd.DataFrame(future_data)
+    df_future['timestamp'] = pd.to_datetime(df_future['timestamp'], utc=True).dt.tz_localize(None)
+
+    render_hourly_strip(df_future, "Prediksi 24 Jam Ke Depan (WIB)", key_prefix="future", page_size=8)
+    
+    # ============ RINGKASAN ============
+    st.markdown("---")
+    st.markdown('<div class="section-header"><span>📋</span> Ringkasan</div>', unsafe_allow_html=True)
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Kondisi Saat Ini", latest_data.get("category", "Baik"))
+    with col2:
+        st.metric("PM2.5 Saat Ini", f"{latest_data.get('pm25', 0):.1f} µg/m³")
+    with col3:
+        pred_12h = df_future.head(12)['category'].mode()[0] if not df_future.head(12)['category'].empty else "N/A"
+        st.metric("Prediksi 12 Jam", pred_12h)
+    with col4:
+        pred_24h = df_future['category'].mode()[0] if not df_future['category'].empty else "N/A"
+        st.metric("Prediksi 24 Jam", pred_24h)
+    
+    # Info Box
+    st.markdown(f"""
+    <div class="info-box">
+        <div class="title">📊 Informasi Data</div>
+        <div class="content">
+            <strong>Sumber:</strong> OpenAQ API v3 &nbsp;·&nbsp; 
+            <strong>Lokasi:</strong> {LOCATION['name']} &nbsp;·&nbsp;
+            <strong>Parameter:</strong> PM2.5, PM1, Suhu, Kelembapan, um003 &nbsp;·&nbsp;
+            <strong>Data terakhir:</strong> {ts_display} WIB &nbsp;·&nbsp;
+            <strong>Update berikutnya:</strong> +1 jam
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+if __name__ == "__main__":
+    main()
