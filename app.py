@@ -248,6 +248,52 @@ def predict(spark, model, data):
     return labels[int(pred_idx)]
 
 
+def get_anchor_data(history):
+    """
+    Mengambil data historis yang paling dekat dengan jam sekarang (dibulatkan ke bawah).
+    Contoh: sekarang 10:45 -> cari data jam 10:00.
+    Kalau tidak ada -> pakai data terakhir sebelum jam 10:00.
+    Kalau tidak ada juga -> pakai data terakhir yang tersedia (paling baru).
+    """
+    if not history:
+        return None
+
+    df = pd.DataFrame(history)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+    now = datetime.now()
+    anchor = now.replace(minute=0, second=0, microsecond=0)
+
+    before = df[df["timestamp"] <= anchor]
+
+    if len(before) > 0:
+        return before.sort_values("timestamp").iloc[-1].to_dict()
+
+    return df.sort_values("timestamp").iloc[-1].to_dict()
+
+
+def get_hourly_pattern(history_df, feature_cols):
+    """
+    Menghitung rata-rata nilai tiap fitur berdasarkan jam-dalam-hari (0-23)
+    dari data historis. Dipakai sebagai dasar prediksi fitur masa depan
+    (pola diurnal), menggantikan noise acak (np.random.normal).
+    Jika suatu jam tidak punya data historis, akan di-interpolasi dari jam terdekat.
+    """
+    df = history_df.copy()
+    df["hour"] = df["timestamp"].dt.hour
+    pattern = df.groupby("hour")[feature_cols].mean()
+
+    # Lengkapi 24 jam penuh, isi jam yang kosong dengan interpolasi melingkar
+    full_index = pd.Index(range(24), name="hour")
+    pattern = pattern.reindex(full_index)
+    pattern = pd.concat([pattern, pattern, pattern])
+    pattern = pattern.interpolate(limit_direction="both")
+    pattern = pattern.iloc[24:48]
+    pattern.index = range(24)
+
+    return pattern
+
+
 def display_metric_card(title, value, unit, color):
     st.markdown(f"""
     <div style='
@@ -282,31 +328,24 @@ def main():
         spark, model = load_model()
     
     # ============ AMBIL DATA ============
-    latest_data = None
-    
-    # Coba dari queue
+    # Kosongkan antrian queue supaya recent_data/history_data selalu yang terbaru
     while not data_queue.empty():
-        latest_data = data_queue.get()
-    
-    # Coba dari recent_data
-    if latest_data is None and recent_data is not None:
-        latest_data = recent_data
-    
-    # Coba dari history_data
-    if latest_data is None and history_data:
-        latest_data = history_data[-1]
-    
-    # Jika masih belum ada, fetch langsung
-    if latest_data is None:
+        data_queue.get()
+
+    # Jika history_data masih kosong, fetch langsung dulu
+    if not history_data:
         with st.spinner("Mengambil data dari OpenAQ..."):
             stream = OpenAQStream(OPENAQ_API_KEY)
             stream.discover_sensors()
             recent, historical = stream.fetch_all_data()
             if recent:
-                latest_data = recent
                 recent_data = recent
                 history_data = historical
-    
+
+    # Anchor time: pilih data historis paling dekat dengan jam sekarang
+    # (bukan sekadar data[-1] dari API, karena OpenAQ tidak selalu update tepat waktu)
+    latest_data = get_anchor_data(history_data)
+
     # Jika masih tidak ada data
     if latest_data is None:
         st.warning("⚠️ Belum ada data dari OpenAQ. Tunggu update berikutnya.")
@@ -387,10 +426,10 @@ def main():
         df_hist['timestamp'] = pd.to_datetime(df_hist['timestamp'])
         df_hist = df_hist.sort_values('timestamp')
         
-        # Ambil 24 jam terakhir dari data terakhir
-        last_ts = df_hist['timestamp'].max()
-        cutoff = last_ts - timedelta(hours=24)
-        df_hist = df_hist[df_hist['timestamp'] >= cutoff].copy()
+        # Ambil 24 jam ke belakang berdasarkan anchor time (bukan max data historis)
+        anchor_ts = pd.to_datetime(latest_data["timestamp"])
+        cutoff = anchor_ts - timedelta(hours=24)
+        df_hist = df_hist[(df_hist['timestamp'] >= cutoff) & (df_hist['timestamp'] <= anchor_ts)].copy()
         
         if len(df_hist) > 0:
             # Prediksi kategori untuk historis
@@ -489,18 +528,51 @@ def main():
     
     # ============ PREDIKSI 24 JAM ============
     st.subheader("🔮 Prediksi 24 Jam Ke Depan")
-    
+    st.caption(
+        "Fitur (PM2.5, PM1, suhu, kelembapan, um003) untuk tiap jam ke depan diestimasi dari "
+        "pola nilai per jam-dalam-hari pada data historis yang tersedia (bukan angka acak). "
+        "Random Forest kemudian mengklasifikasikan kategori ISPU dari fitur hasil estimasi tersebut — "
+        "sesuai fungsi aslinya sebagai model klasifikasi, bukan regresi PM2.5."
+    )
+
+    anchor_ts = pd.to_datetime(latest_data["timestamp"])
+    feature_cols = ["pm1", "pm25", "relativehumidity", "temperature", "um003"]
+
+    hourly_pattern = None
+    if history_data:
+        df_pattern_src = pd.DataFrame(history_data)
+        df_pattern_src["timestamp"] = pd.to_datetime(df_pattern_src["timestamp"])
+        available_cols = [c for c in feature_cols if c in df_pattern_src.columns]
+        if available_cols:
+            hourly_pattern = get_hourly_pattern(df_pattern_src, available_cols)
+
     future_data = []
     for i in range(1, 25):
-        hour_variation = np.sin(i * np.pi / 12) * 0.5
-        future = {
-            "timestamp": (datetime.now() + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "pm1": max(0, latest_data.get("pm1", 10) + hour_variation * 2 + np.random.normal(0, 0.3)),
-            "pm25": max(0, latest_data.get("pm25", 15) + hour_variation * 3 + np.random.normal(0, 0.3)),
-            "relativehumidity": max(0, min(100, latest_data.get("relativehumidity", 65) - hour_variation * 3 + np.random.normal(0, 0.5))),
-            "temperature": max(0, min(45, latest_data.get("temperature", 27) + hour_variation + np.random.normal(0, 0.2))),
-            "um003": max(0, latest_data.get("um003", 300) + hour_variation * 50 + np.random.normal(0, 5)),
-        }
+        future_time = anchor_ts + timedelta(hours=i)
+        target_hour = future_time.hour
+
+        if hourly_pattern is not None:
+            # Estimasi fitur dari pola historis pada jam yang sama
+            base = hourly_pattern.loc[target_hour]
+            future = {
+                "timestamp": future_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "pm1": max(0, base.get("pm1", latest_data.get("pm1", 10))),
+                "pm25": max(0, base.get("pm25", latest_data.get("pm25", 15))),
+                "relativehumidity": max(0, min(100, base.get("relativehumidity", latest_data.get("relativehumidity", 65)))),
+                "temperature": max(0, min(45, base.get("temperature", latest_data.get("temperature", 27)))),
+                "um003": max(0, base.get("um003", latest_data.get("um003", 300))),
+            }
+        else:
+            # Fallback kalau data historis belum cukup: persistence dari data terakhir
+            future = {
+                "timestamp": future_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "pm1": latest_data.get("pm1", 10),
+                "pm25": latest_data.get("pm25", 15),
+                "relativehumidity": latest_data.get("relativehumidity", 65),
+                "temperature": latest_data.get("temperature", 27),
+                "um003": latest_data.get("um003", 300),
+            }
+
         future["category"] = predict(spark, model, future)
         future_data.append(future)
     
