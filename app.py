@@ -17,7 +17,6 @@ import requests
 import time
 from threading import Thread
 import queue
-import json
 
 # Auto-detect JAVA_HOME
 if "JAVA_HOME" not in os.environ:
@@ -165,14 +164,11 @@ class OpenAQStream:
         now = datetime.utcnow()
         
         # Format waktu untuk OpenAQ
-        # Contoh: 2026-06-27T01:00:00Z
         datetime_to = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-        datetime_from_1h = (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         datetime_from_24h = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
         
         # Dictionary untuk menyimpan data per timestamp
         data_map = {}
-        recent = None
         
         for param, sensor_id in self.sensor_ids.items():
             # Ambil data 24 jam terakhir
@@ -201,8 +197,7 @@ class OpenAQStream:
         historical.sort(key=lambda x: x.get("timestamp", ""))
         
         # Ambil data terbaru
-        if historical:
-            recent = historical[-1]
+        recent = historical[-1] if historical else None
         
         return recent, historical
 
@@ -271,6 +266,8 @@ def display_metric_card(title, value, unit, color):
 
 
 def main():
+    global recent_data, history_data
+    
     st.title("🌤️ Dashboard Kualitas Udara Malang")
     st.caption(f"Update data setiap 1 jam dari OpenAQ | Lokasi: {LOCATION['name']}")
     
@@ -333,7 +330,6 @@ def main():
     # ============ FORMAT TIMESTAMP ============
     ts = latest_data.get('timestamp', 'N/A')
     try:
-        # Format: 2026-06-27T01:00:00Z
         dt = pd.to_datetime(ts)
         ts_formatted = dt.strftime('%d %b %Y, %H:%M')
         ts_display = dt.strftime('%Y-%m-%d %H:%M')
