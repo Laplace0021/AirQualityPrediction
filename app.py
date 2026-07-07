@@ -212,50 +212,77 @@ class OpenAQStream:
             return []
     
     def fetch_all_data(self):
-        """Fetch semua data: recent + historical"""
+        """
+        Fetch semua data: recent + historical.
+        Digabung per JAM (bukan exact timestamp match), karena sensor PM1/PM2.5/RH/suhu/um003
+        hampir tidak pernah melapor pada detik yang persis sama. Sebelumnya kode ini mensyaratkan
+        kombinasi timestamp identik antar sensor -> hampir selalu kosong walau sensor ditemukan.
+        """
         if not self.sensor_ids:
             self.discover_sensors()
         if not self.sensor_ids:
             return None, []
-        
+
         now = datetime.utcnow()
-        
-        # Format waktu untuk OpenAQ
         datetime_to = now.strftime("%Y-%m-%dT%H:%M:%SZ")
         datetime_from_24h = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        
-        # Dictionary untuk menyimpan data per timestamp
-        data_map = {}
-        
+
+        per_param_rows = {}
+
         for param, sensor_id in self.sensor_ids.items():
-            # Ambil data 24 jam terakhir
-            results = self.get_sensor_data(sensor_id, datetime_from_24h, datetime_to, limit=50)
-            
-            # Jika tidak ada data 24 jam, ambil data terakhir
+            results = self.get_sensor_data(sensor_id, datetime_from_24h, datetime_to, limit=200)
             if not results:
-                results = self.get_sensor_data(sensor_id, limit=50)
-            
+                results = self.get_sensor_data(sensor_id, limit=200)
+
+            rows = []
             for r in results:
                 timestamp = r.get("datetime", {}).get("utc")
                 value = r.get("value")
                 if timestamp and value is not None:
-                    if timestamp not in data_map:
-                        data_map[timestamp] = {"timestamp": timestamp}
-                    data_map[timestamp][param] = value
-        
-        # Konversi ke list dan sort
-        historical = []
-        for ts, data in data_map.items():
-            if "pm25" in data and "relativehumidity" in data and "temperature" in data:
-                data["pm1"] = data.get("pm25", 0) * 0.6
-                data["um003"] = data.get("pm25", 0) * 80
-                historical.append(data)
-        
-        historical.sort(key=lambda x: x.get("timestamp", ""))
-        
-        # Ambil data terbaru
+                    rows.append((timestamp, value))
+            per_param_rows[param] = rows
+            self.last_debug[f"raw_count_{param}"] = len(rows)
+
+        # Bangun rata-rata per jam untuk tiap parameter, lalu gabungkan by jam
+        hourly_frames = {}
+        for param, rows in per_param_rows.items():
+            if not rows:
+                continue
+            df = pd.DataFrame(rows, columns=["timestamp", param])
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+            df["hour_bucket"] = df["timestamp"].dt.floor("h")
+            hourly_frames[param] = df.groupby("hour_bucket")[param].mean()
+
+        if not hourly_frames:
+            self.last_debug["fetch_reason"] = "Tidak ada satupun measurement valid yang dikembalikan sensor."
+            return None, []
+
+        combined = pd.DataFrame(hourly_frames).reset_index().rename(columns={"hour_bucket": "timestamp_dt"})
+        self.last_debug["combined_hours_before_filter"] = len(combined)
+        self.last_debug["combined_columns"] = list(combined.columns)
+
+        required = [c for c in ["pm25", "relativehumidity", "temperature"] if c in combined.columns]
+        if required:
+            combined = combined.dropna(subset=required)
+        self.last_debug["combined_hours_after_filter"] = len(combined)
+
+        if combined.empty:
+            self.last_debug["fetch_reason"] = (
+                "Tiap parameter punya data, tapi tidak ada satu jam pun dengan kombinasi "
+                "pm25 + relativehumidity + temperature lengkap dalam 24 jam terakhir."
+            )
+            return None, []
+
+        if "pm1" not in combined.columns:
+            combined["pm1"] = combined.get("pm25", 0) * 0.6
+        if "um003" not in combined.columns:
+            combined["um003"] = combined.get("pm25", 0) * 80
+
+        combined = combined.sort_values("timestamp_dt")
+        combined["timestamp"] = combined["timestamp_dt"].dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        historical = combined.drop(columns=["timestamp_dt"]).to_dict("records")
         recent = historical[-1] if historical else None
-        
+
         return recent, historical
 
 
@@ -415,6 +442,16 @@ def main():
                 st.success(f"✅ Ditemukan {len(sensors)} sensor!")
                 for param, sid in sensors.items():
                     st.write(f"- {param}: sensor_id={sid}")
+
+                st.write("**Mencoba ambil & gabungkan data measurement...**")
+                recent_try, historical_try = stream.fetch_all_data()
+                st.write("**Detail debug fetch:**")
+                st.json(stream.last_debug)
+
+                if not historical_try:
+                    st.error("❌ Sensor ditemukan, tapi belum berhasil menggabungkan data measurement jadi baris historis.")
+                else:
+                    st.success(f"✅ Berhasil menggabungkan {len(historical_try)} baris data per jam.")
             else:
                 st.error("❌ Tidak ditemukan sensor di lokasi Malang")
                 st.write("**Detail debug:**")
