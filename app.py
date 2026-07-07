@@ -367,9 +367,15 @@ def get_anchor_data(history):
         return None
 
     df = pd.DataFrame(history)
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    # utc=True memaksa hasil jadi tz-aware (UTC) walaupun sebagian string ada yang
+    # tidak berakhiran "Z"/offset, lalu tz_localize(None) melepas info tz supaya
+    # bisa dibandingkan dengan anchor yang juga naive. Semua tetap merepresentasikan UTC.
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_localize(None)
 
-    now = datetime.now()
+    # PENTING: pakai UTC, bukan datetime.now() (waktu lokal server), karena semua
+    # timestamp dari OpenAQ dalam UTC. Kalau pakai now() lokal, anchor bisa salah
+    # beberapa jam tergantung timezone server (mis. WIB = UTC+7).
+    now = datetime.utcnow()
     anchor = now.replace(minute=0, second=0, microsecond=0)
 
     before = df[df["timestamp"] <= anchor]
@@ -548,7 +554,9 @@ def main():
     
     if history_data and len(history_data) > 0:
         df_hist = pd.DataFrame(history_data)
-        df_hist['timestamp'] = pd.to_datetime(df_hist['timestamp'])
+        # utc=True + tz_localize(None): samakan dengan get_anchor_data() supaya tidak
+        # crash "Invalid comparison" saat dibandingkan dengan anchor_ts/cutoff di bawah.
+        df_hist['timestamp'] = pd.to_datetime(df_hist['timestamp'], utc=True).dt.tz_localize(None)
         df_hist = df_hist.sort_values('timestamp')
         
         # Ambil 24 jam ke belakang berdasarkan anchor time (bukan max data historis)
