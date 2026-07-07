@@ -1,7 +1,7 @@
 """
 app.py
 Dashboard Kualitas Udara Malang - OpenAQ v3
-Dengan Optimasi Streaming & Caching
+Dengan Optimasi Batch Prediction & Cache
 """
 
 import os
@@ -13,10 +13,8 @@ from pyspark.sql import SparkSession
 from pyspark.ml import PipelineModel
 import requests
 import time
-from threading import Thread, Lock
+from threading import Thread
 import queue
-import pickle
-from functools import lru_cache
 
 # Auto-detect JAVA_HOME
 if "JAVA_HOME" not in os.environ:
@@ -81,25 +79,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ============ DATA CACHE ============
-# Simpan data di session_state agar tidak reload setiap kali
-if 'cached_data' not in st.session_state:
-    st.session_state.cached_data = {
-        'recent': None,
-        'history': [],
-        'last_update': None,
-        'predicted_history': None,
-        'predicted_future': None,
-        'cache_version': 0
-    }
-
-if 'prediction_cache' not in st.session_state:
-    st.session_state.prediction_cache = {}
-
-if 'data_lock' not in st.session_state:
-    st.session_state.data_lock = Lock()
-
 data_queue = queue.Queue(maxsize=100)
+history_data = []
+recent_data = None
+
+# Cache untuk prediksi
+prediction_cache = {}
 
 # ============ STREAMING WORKER ============
 class OpenAQStream:
@@ -188,7 +173,7 @@ class OpenAQStream:
 
         now = datetime.utcnow()
         datetime_to = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-        datetime_from_24h = (now - timedelta(hours=72)).strftime("%Y-%m-%dT%H:%M:%SZ")  # Ambil lebih banyak
+        datetime_from_24h = (now - timedelta(hours=72)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         per_param_rows = {}
 
@@ -242,31 +227,27 @@ class OpenAQStream:
 
 
 def stream_worker():
-    """Worker streaming di background - update data setiap jam"""
     stream = OpenAQStream(OPENAQ_API_KEY)
-    
-    # Initial fetch
-    recent, historical = stream.fetch_all_data()
-    if recent:
-        data_queue.put((recent, historical, datetime.now()))
     
     while True:
         try:
-            time.sleep(3600)  # 1 jam
             recent, historical = stream.fetch_all_data()
+            
             if recent:
-                # Clear old data from queue
-                while not data_queue.empty():
-                    try:
-                        data_queue.get_nowait()
-                    except:
-                        break
-                data_queue.put((recent, historical, datetime.now()))
+                if not data_queue.full():
+                    data_queue.put(recent)
+                global recent_data
+                recent_data = recent
+            
+            if historical:
+                global history_data
+                history_data = historical
+            
+            time.sleep(3600)
         except Exception as e:
             time.sleep(60)
 
 
-# ============ MODEL LOADING ============
 @st.cache_resource
 def load_model():
     spark = SparkSession.builder \
@@ -299,8 +280,8 @@ def predict_batch(spark, model, data_list):
             if k not in ['timestamp', 'category']
         ))
         
-        if cache_key in st.session_state.prediction_cache:
-            results[i] = st.session_state.prediction_cache[cache_key]
+        if cache_key in prediction_cache:
+            results[i] = prediction_cache[cache_key]
         else:
             uncached_indices.append(i)
             uncached_data.append(data)
@@ -324,13 +305,31 @@ def predict_batch(spark, model, data_list):
                 for k, v in data_list[idx].items() 
                 if k not in ['timestamp', 'category']
             ))
-            st.session_state.prediction_cache[cache_key] = pred_label
+            prediction_cache[cache_key] = pred_label
     
     return results
 
 
+def get_anchor_data(history):
+    if not history:
+        return None
+
+    df = pd.DataFrame(history)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_localize(None)
+
+    now = datetime.utcnow()
+    anchor = now.replace(minute=0, second=0, microsecond=0)
+
+    before = df[df["timestamp"] <= anchor]
+
+    if len(before) > 0:
+        return before.sort_values("timestamp").iloc[-1].to_dict()
+
+    return df.sort_values("timestamp").iloc[-1].to_dict()
+
+
 def get_hourly_pattern(history_df, feature_cols):
-    if history_df.empty:
+    if history_df is None or history_df.empty:
         return None
     
     df = history_df.copy()
@@ -347,12 +346,16 @@ def get_hourly_pattern(history_df, feature_cols):
     return pattern
 
 
-# ============ UI FUNCTIONS ============
 def inject_custom_css():
     st.markdown("""
     <style>
-    .stApp { background-color: #f5f7fa !important; }
-    .main { background-color: #f5f7fa !important; }
+    .stApp {
+        background-color: #f5f7fa !important;
+    }
+    
+    .main {
+        background-color: #f5f7fa !important;
+    }
     
     .main-header {
         font-size: 2rem;
@@ -389,7 +392,10 @@ def inject_custom_css():
         flex-wrap: wrap;
     }
     
-    .weather-icon { font-size: 72px; line-height: 1; }
+    .weather-icon {
+        font-size: 72px;
+        line-height: 1;
+    }
     
     .weather-temp {
         font-size: 56px;
@@ -435,8 +441,15 @@ def inject_custom_css():
         color: #4a5a6a;
     }
     
-    .weather-detail-item .label { color: #8894a0; font-weight: 500; }
-    .weather-detail-item .value { font-weight: 600; color: #1a2634; }
+    .weather-detail-item .label {
+        color: #8894a0;
+        font-weight: 500;
+    }
+    
+    .weather-detail-item .value {
+        font-weight: 600;
+        color: #1a2634;
+    }
     
     .weather-badge {
         display: inline-block;
@@ -492,7 +505,17 @@ def inject_custom_css():
         border-bottom: 1px solid #f0f4f8;
     }
     
-    .forecast-table tr:last-child td { border-bottom: none; }
+    .forecast-table tr:last-child td {
+        border-bottom: none;
+    }
+    
+    .forecast-table .date-cell {
+        font-weight: 700;
+        color: #1a2634;
+        text-align: left;
+        font-size: 13px;
+        min-width: 100px;
+    }
     
     .forecast-table .time-cell {
         color: #6b7a8a;
@@ -500,7 +523,10 @@ def inject_custom_css():
         min-width: 60px;
     }
     
-    .forecast-table .icon-cell { font-size: 28px; min-width: 50px; }
+    .forecast-table .icon-cell {
+        font-size: 28px;
+        min-width: 50px;
+    }
     
     .forecast-table .temp-cell {
         font-weight: 700;
@@ -524,7 +550,9 @@ def inject_custom_css():
         font-size: 13px;
     }
     
-    .date-separator td { padding: 8px 16px !important; }
+    .date-separator td {
+        padding: 8px 16px !important;
+    }
     
     .metric-grid {
         display: grid;
@@ -579,6 +607,26 @@ def inject_custom_css():
         gap: 10px;
     }
     
+    .nav-button {
+        background: white !important;
+        border: 1px solid #eef2f6 !important;
+        border-radius: 12px !important;
+        color: #1a2634 !important;
+        font-size: 18px !important;
+        padding: 4px 12px !important;
+        transition: all 0.2s ease !important;
+    }
+    
+    .nav-button:hover {
+        background: #f8fafc !important;
+        border-color: #d0d8e0 !important;
+    }
+    
+    .nav-button:disabled {
+        opacity: 0.4 !important;
+        cursor: not-allowed !important;
+    }
+    
     .info-box {
         background: #f8fafc;
         border: 1px solid #eef2f6;
@@ -600,29 +648,39 @@ def inject_custom_css():
         line-height: 1.6;
     }
     
-    .update-badge {
-        display: inline-block;
-        background: #2ecc71;
-        color: white;
-        padding: 2px 12px;
-        border-radius: 12px;
-        font-size: 12px;
-        font-weight: 600;
-        margin-left: 12px;
-    }
-    
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
     
     @media (max-width: 768px) {
-        .weather-main { gap: 20px; }
-        .weather-temp { font-size: 40px; }
-        .weather-card { padding: 20px; }
-        .weather-details { gap: 16px 20px; }
-        .forecast-section { padding: 16px; }
-        .forecast-table td { padding: 6px 8px; font-size: 12px; }
-        .metric-grid { grid-template-columns: repeat(2, 1fr); }
+        .weather-main {
+            gap: 20px;
+        }
+        
+        .weather-temp {
+            font-size: 40px;
+        }
+        
+        .weather-card {
+            padding: 20px;
+        }
+        
+        .weather-details {
+            gap: 16px 20px;
+        }
+        
+        .forecast-section {
+            padding: 16px;
+        }
+        
+        .forecast-table td {
+            padding: 6px 8px;
+            font-size: 12px;
+        }
+        
+        .metric-grid {
+            grid-template-columns: repeat(2, 1fr);
+        }
     }
     </style>
     """, unsafe_allow_html=True)
@@ -767,43 +825,29 @@ def render_hourly_forecast(df, title, key_prefix, page_size=8):
     st.caption(f"Menampilkan jam ke-{start + 1}–{min(end, total)} dari {total}")
 
 
-# ============ MAIN ============
 def main():
+    global recent_data, history_data
+    
     inject_custom_css()
     
     st.markdown('<div class="main-header">🌤️ Kualitas Udara Malang</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="sub-header">📍 {LOCATION["name"]} · Update setiap 1 jam dari OpenAQ</div>', unsafe_allow_html=True)
     
-    # Start streaming thread
+    # Start streaming
     if 'stream_thread' not in st.session_state:
         thread = Thread(target=stream_worker, daemon=True)
         thread.start()
         st.session_state.stream_thread = thread
-        st.session_state.stream_started = datetime.now()
-    
-    # Process data from queue
-    with st.session_state.data_lock:
-        if not data_queue.empty():
-            try:
-                recent, historical, update_time = data_queue.get_nowait()
-                if recent:
-                    st.session_state.cached_data['recent'] = recent
-                    st.session_state.cached_data['history'] = historical
-                    st.session_state.cached_data['last_update'] = update_time
-                    st.session_state.cached_data['cache_version'] += 1
-            except:
-                pass
     
     # Load model
     with st.spinner("Memuat model..."):
         spark, model = load_model()
     
-    # ============ AMBIL DATA DARI CACHE ============
-    recent_data = st.session_state.cached_data.get('recent')
-    history_data = st.session_state.cached_data.get('history', [])
-    
-    # If no cached data, fetch immediately
-    if recent_data is None:
+    # ============ AMBIL DATA ============
+    while not data_queue.empty():
+        data_queue.get()
+
+    if not history_data:
         with st.spinner("Mengambil data dari OpenAQ..."):
             stream = OpenAQStream(OPENAQ_API_KEY)
             stream.discover_sensors()
@@ -811,27 +855,45 @@ def main():
             if recent:
                 recent_data = recent
                 history_data = historical
-                st.session_state.cached_data['recent'] = recent
-                st.session_state.cached_data['history'] = historical
-                st.session_state.cached_data['last_update'] = datetime.now()
-    
-    if recent_data is None:
+
+    latest_data = get_anchor_data(history_data)
+
+    if latest_data is None:
         st.warning("⚠️ Belum ada data dari OpenAQ. Tunggu update berikutnya.")
+        
+        with st.expander("🔍 Status Sensor", expanded=True):
+            stream = OpenAQStream(OPENAQ_API_KEY)
+            sensors = stream.discover_sensors()
+            if sensors:
+                st.success(f"✅ Ditemukan {len(sensors)} sensor!")
+                for param, sid in sensors.items():
+                    st.write(f"- {param}: sensor_id={sid}")
+                
+                st.write("**Mencoba ambil & gabungkan data measurement...**")
+                recent_try, historical_try = stream.fetch_all_data()
+                
+                if not historical_try:
+                    st.error("❌ Sensor ditemukan, tapi belum berhasil menggabungkan data measurement jadi baris historis.")
+                else:
+                    st.success(f"✅ Berhasil menggabungkan {len(historical_try)} baris data per jam.")
+            else:
+                st.error("❌ Tidak ditemukan sensor di lokasi Malang")
         st.stop()
     
     # ============ BATCH PREDICT ============
     with st.spinner("Memproses data..."):
         # Predict latest
-        kategori = predict_batch(spark, model, [recent_data])[0]
-        recent_data["category"] = kategori
+        kategori = predict_batch(spark, model, [latest_data])[0]
+        latest_data["category"] = kategori
         
-        # Process historical
-        if history_data and st.session_state.cached_data.get('cache_version', 0) != st.session_state.get('last_cache_version', 0):
+        # Prepare historical data
+        df_hist = None
+        if history_data:
             df_hist = pd.DataFrame(history_data)
             df_hist['timestamp'] = pd.to_datetime(df_hist['timestamp'], utc=True).dt.tz_localize(None)
             df_hist = df_hist.sort_values('timestamp')
             
-            anchor_ts = pd.to_datetime(recent_data["timestamp"])
+            anchor_ts = pd.to_datetime(latest_data["timestamp"])
             cutoff = anchor_ts - timedelta(hours=24)
             df_hist = df_hist[(df_hist['timestamp'] >= cutoff) & (df_hist['timestamp'] <= anchor_ts)].copy()
             
@@ -839,62 +901,56 @@ def main():
                 hist_data_list = df_hist.to_dict('records')
                 hist_categories = predict_batch(spark, model, hist_data_list)
                 df_hist['category'] = hist_categories
-                st.session_state.cached_data['predicted_history'] = df_hist
             else:
-                st.session_state.cached_data['predicted_history'] = pd.DataFrame()
+                df_hist = None
+        
+        # Prepare future data
+        anchor_ts = pd.to_datetime(latest_data["timestamp"])
+        feature_cols = ["pm1", "pm25", "relativehumidity", "temperature", "um003"]
+        
+        hourly_pattern = None
+        if history_data:
+            df_pattern_src = pd.DataFrame(history_data)
+            df_pattern_src["timestamp"] = pd.to_datetime(df_pattern_src["timestamp"], utc=True).dt.tz_localize(None)
+            available_cols = [c for c in feature_cols if c in df_pattern_src.columns]
+            if available_cols:
+                hourly_pattern = get_hourly_pattern(df_pattern_src, available_cols)
+        
+        future_data = []
+        for i in range(1, 25):
+            future_time = anchor_ts + timedelta(hours=i)
+            target_hour = future_time.hour
             
-            # Process future
-            anchor_ts = pd.to_datetime(recent_data["timestamp"])
-            feature_cols = ["pm1", "pm25", "relativehumidity", "temperature", "um003"]
-            
-            hourly_pattern = None
-            if history_data:
-                df_pattern_src = pd.DataFrame(history_data)
-                df_pattern_src["timestamp"] = pd.to_datetime(df_pattern_src["timestamp"], utc=True).dt.tz_localize(None)
-                available_cols = [c for c in feature_cols if c in df_pattern_src.columns]
-                if available_cols:
-                    hourly_pattern = get_hourly_pattern(df_pattern_src, available_cols)
-            
-            future_data = []
-            for i in range(1, 25):
-                future_time = anchor_ts + timedelta(hours=i)
-                target_hour = future_time.hour
-                
-                if hourly_pattern is not None:
-                    base = hourly_pattern.loc[target_hour]
-                    future = {
-                        "timestamp": future_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        "pm1": max(0, base.get("pm1", recent_data.get("pm1", 10))),
-                        "pm25": max(0, base.get("pm25", recent_data.get("pm25", 15))),
-                        "relativehumidity": max(0, min(100, base.get("relativehumidity", recent_data.get("relativehumidity", 65)))),
-                        "temperature": max(0, min(45, base.get("temperature", recent_data.get("temperature", 27)))),
-                        "um003": max(0, base.get("um003", recent_data.get("um003", 300))),
-                    }
-                else:
-                    future = {
-                        "timestamp": future_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        "pm1": recent_data.get("pm1", 10),
-                        "pm25": recent_data.get("pm25", 15),
-                        "relativehumidity": recent_data.get("relativehumidity", 65),
-                        "temperature": recent_data.get("temperature", 27),
-                        "um003": recent_data.get("um003", 300),
-                    }
-                future_data.append(future)
-            
-            future_categories = predict_batch(spark, model, future_data)
-            for i, cat in enumerate(future_categories):
-                future_data[i]["category"] = cat
-            
-            df_future = pd.DataFrame(future_data)
-            df_future['timestamp'] = pd.to_datetime(df_future['timestamp'], utc=True).dt.tz_localize(None)
-            st.session_state.cached_data['predicted_future'] = df_future
-            st.session_state.last_cache_version = st.session_state.cached_data['cache_version']
-        else:
-            df_hist = st.session_state.cached_data.get('predicted_history', pd.DataFrame())
-            df_future = st.session_state.cached_data.get('predicted_future', pd.DataFrame())
+            if hourly_pattern is not None:
+                base = hourly_pattern.loc[target_hour]
+                future = {
+                    "timestamp": future_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "pm1": max(0, base.get("pm1", latest_data.get("pm1", 10))),
+                    "pm25": max(0, base.get("pm25", latest_data.get("pm25", 15))),
+                    "relativehumidity": max(0, min(100, base.get("relativehumidity", latest_data.get("relativehumidity", 65)))),
+                    "temperature": max(0, min(45, base.get("temperature", latest_data.get("temperature", 27)))),
+                    "um003": max(0, base.get("um003", latest_data.get("um003", 300))),
+                }
+            else:
+                future = {
+                    "timestamp": future_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "pm1": latest_data.get("pm1", 10),
+                    "pm25": latest_data.get("pm25", 15),
+                    "relativehumidity": latest_data.get("relativehumidity", 65),
+                    "temperature": latest_data.get("temperature", 27),
+                    "um003": latest_data.get("um003", 300),
+                }
+            future_data.append(future)
+        
+        future_categories = predict_batch(spark, model, future_data)
+        for i, cat in enumerate(future_categories):
+            future_data[i]["category"] = cat
+        
+        df_future = pd.DataFrame(future_data)
+        df_future['timestamp'] = pd.to_datetime(df_future['timestamp'], utc=True).dt.tz_localize(None)
     
     # ============ FORMAT TIMESTAMP ============
-    ts = recent_data.get('timestamp', 'N/A')
+    ts = latest_data.get('timestamp', 'N/A')
     try:
         dt_utc = pd.to_datetime(ts)
         dt_wib = dt_utc + timedelta(hours=7)
@@ -904,23 +960,13 @@ def main():
         ts_formatted = ts
         ts_display = ts
     
-    # Show last update time
-    last_update = st.session_state.cached_data.get('last_update')
-    if last_update:
-        time_diff = datetime.now() - last_update
-        minutes_ago = int(time_diff.total_seconds() / 60)
-        if minutes_ago < 60:
-            st.caption(f"🔄 Data terakhir diperbarui {minutes_ago} menit yang lalu")
-        else:
-            st.caption(f"🔄 Data terakhir diperbarui {int(minutes_ago/60)} jam yang lalu")
-    
     # ============ RENDER ============
-    render_weather_card(recent_data, ts_formatted)
-    render_metric_grid(recent_data, kategori)
+    render_weather_card(latest_data, ts_formatted)
+    render_metric_grid(latest_data, kategori)
     
     # Historical
     st.markdown('<div class="section-title">📊 Historis 24 Jam</div>', unsafe_allow_html=True)
-    if not df_hist.empty and len(df_hist) > 0:
+    if df_hist is not None and not df_hist.empty and len(df_hist) > 0:
         render_hourly_forecast(df_hist, "Historis 24 Jam Terakhir", key_prefix="hist")
     else:
         st.info("⏳ Belum cukup data historis (minimal 24 jam)")
@@ -936,8 +982,10 @@ def main():
         mengklasifikasikan kategori ISPU dari fitur hasil estimasi tersebut.
         """)
     
-    if not df_future.empty:
+    if df_future is not None and not df_future.empty:
         render_hourly_forecast(df_future, "Prediksi 24 Jam Ke Depan", key_prefix="future", page_size=8)
+    else:
+        st.info("⏳ Belum ada data prediksi.")
     
     # Summary
     st.markdown('<div class="section-title">📋 Ringkasan</div>', unsafe_allow_html=True)
@@ -945,18 +993,18 @@ def main():
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Kondisi Saat Ini", recent_data.get("category", "Baik"))
+        st.metric("Kondisi Saat Ini", latest_data.get("category", "Baik"))
     with col2:
-        st.metric("PM2.5 Saat Ini", f"{recent_data.get('pm25', 0):.1f} µg/m³")
+        st.metric("PM2.5 Saat Ini", f"{latest_data.get('pm25', 0):.1f} µg/m³")
     with col3:
-        pred_12h = df_future.head(12)['category'].mode()[0] if not df_future.head(12)['category'].empty else "N/A"
+        pred_12h = df_future.head(12)['category'].mode()[0] if df_future is not None and not df_future.head(12)['category'].empty else "N/A"
         st.metric("Prediksi 12 Jam", pred_12h)
     with col4:
-        pred_24h = df_future['category'].mode()[0] if not df_future['category'].empty else "N/A"
+        pred_24h = df_future['category'].mode()[0] if df_future is not None and not df_future['category'].empty else "N/A"
         st.metric("Prediksi 24 Jam", pred_24h)
     
     # Cache stats
-    cache_size = len(st.session_state.prediction_cache)
+    cache_size = len(prediction_cache)
     st.caption(f"⚡ Cache: {cache_size} prediksi tersimpan")
     
     st.markdown(f"""
