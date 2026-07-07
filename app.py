@@ -91,44 +91,101 @@ class OpenAQStream:
         self.headers = {"X-API-Key": api_key}
         self.sensor_ids = {}
         self.location_id = None
+        self.last_debug = {}
         
     def discover_sensors(self):
-        """Cari sensor di Malang"""
+        """
+        Cari location_id berdasarkan koordinat, lalu ambil daftar sensornya.
+        PENTING: endpoint sensor yang benar di OpenAQ v3 adalah nested resource:
+            GET /locations/{id}/sensors
+        BUKAN /sensors?location_id=... (itu bukan endpoint yang valid, makanya
+        sebelumnya selalu gagal walau location_id berhasil ditemukan).
+        """
+        self.last_debug = {}
         try:
             params = {
                 "coordinates": f"{LOCATION['latitude']},{LOCATION['longitude']}",
                 "radius": LOCATION["radius"],
                 "limit": 5
             }
-            
+
             resp = requests.get(
                 f"{OPENAQ_BASE_URL}/locations",
                 params=params,
                 headers=self.headers,
-                timeout=10
+                timeout=15
             )
-            
-            if resp.status_code == 200:
-                locations = resp.json().get("results", [])
-                if locations:
-                    self.location_id = locations[0].get("id")
-                    
-                    sensor_resp = requests.get(
-                        f"{OPENAQ_BASE_URL}/sensors",
-                        params={"location_id": self.location_id, "limit": 30},
-                        headers=self.headers,
-                        timeout=10
-                    )
-                    
-                    if sensor_resp.status_code == 200:
-                        sensors = sensor_resp.json().get("results", [])
-                        for sensor in sensors:
-                            param = sensor.get("parameter", {}).get("name", "").lower()
-                            if param in ["pm1", "pm25", "relativehumidity", "temperature"]:
-                                self.sensor_ids[param] = sensor.get("id")
-                        return self.sensor_ids
-            return {}
+
+            print("DEBUG /locations status:", resp.status_code)
+            print("DEBUG /locations body:", resp.text[:2000])
+
+            self.last_debug["locations_status"] = resp.status_code
+            self.last_debug["locations_body"] = resp.text[:1000]
+
+            if resp.status_code == 401:
+                self.last_debug["reason"] = "401 Unauthorized -> API key salah/kadaluarsa."
+                return {}
+            if resp.status_code != 200:
+                self.last_debug["reason"] = f"Request /locations gagal, status {resp.status_code}."
+                return {}
+
+            locations = resp.json().get("results", [])
+            self.last_debug["locations_found"] = len(locations)
+
+            if not locations:
+                self.last_debug["reason"] = (
+                    f"Tidak ada lokasi OpenAQ dalam radius {LOCATION['radius']}m dari koordinat ini."
+                )
+                return {}
+
+            self.location_id = locations[0].get("id")
+            self.last_debug["location_id"] = self.location_id
+            self.last_debug["location_name"] = locations[0].get("name")
+
+            # Endpoint sensor yang benar: nested resource per location
+            sensor_resp = requests.get(
+                f"{OPENAQ_BASE_URL}/locations/{self.location_id}/sensors",
+                headers=self.headers,
+                timeout=15
+            )
+
+            print("DEBUG /locations/{id}/sensors status:", sensor_resp.status_code)
+            print("DEBUG /locations/{id}/sensors body:", sensor_resp.text[:2000])
+
+            self.last_debug["sensors_status"] = sensor_resp.status_code
+            self.last_debug["sensors_body"] = sensor_resp.text[:1000]
+
+            if sensor_resp.status_code == 404:
+                self.last_debug["reason"] = f"404 -> location_id {self.location_id} tidak punya endpoint sensors (mungkin sudah tidak aktif)."
+                return {}
+            if sensor_resp.status_code != 200:
+                self.last_debug["reason"] = f"Request sensors gagal, status {sensor_resp.status_code}."
+                return {}
+
+            sensors = sensor_resp.json().get("results", [])
+            self.last_debug["sensors_found"] = len(sensors)
+            self.last_debug["available_parameters"] = [
+                s.get("parameter", {}).get("name", "").lower() for s in sensors
+            ]
+
+            self.sensor_ids = {}
+            for sensor in sensors:
+                param = sensor.get("parameter", {}).get("name", "").lower()
+                self.sensor_ids[param] = sensor.get("id")
+
+            required = {"pm1", "pm25", "relativehumidity", "temperature"}
+            missing = required - set(self.sensor_ids.keys())
+            if missing:
+                self.last_debug["missing_required_params"] = list(missing)
+                self.last_debug["note"] = (
+                    "Lokasi ini tidak punya semua parameter yang dibutuhkan model. "
+                    "Jika ini terjadi, model tidak bisa dijalankan penuh untuk lokasi ini."
+                )
+
+            return self.sensor_ids
+
         except Exception as e:
+            self.last_debug["reason"] = f"Exception: {e}"
             return {}
     
     def get_sensor_data(self, sensor_id, datetime_from=None, datetime_to=None, limit=50):
@@ -351,7 +408,7 @@ def main():
         st.warning("⚠️ Belum ada data dari OpenAQ. Tunggu update berikutnya.")
         
         # Tampilkan status sensor
-        with st.expander("🔍 Status Sensor"):
+        with st.expander("🔍 Status Sensor", expanded=True):
             stream = OpenAQStream(OPENAQ_API_KEY)
             sensors = stream.discover_sensors()
             if sensors:
@@ -360,6 +417,13 @@ def main():
                     st.write(f"- {param}: sensor_id={sid}")
             else:
                 st.error("❌ Tidak ditemukan sensor di lokasi Malang")
+                st.write("**Detail debug:**")
+                st.json(stream.last_debug)
+                st.caption(
+                    "Cek: status code 401/403 → API key tidak valid atau perlu re-generate di "
+                    "explore.openaq.org. Status 200 tapi locations_found=0 → tidak ada lokasi "
+                    "OpenAQ dalam radius yang ditentukan (coba perbesar LOCATION['radius'])."
+                )
         st.stop()
     
     # Prediksi kategori
