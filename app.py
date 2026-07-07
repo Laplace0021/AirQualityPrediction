@@ -1,7 +1,7 @@
 """
 app.py
-Streaming data dari OpenAQ v3 - Update setiap 1 jam
-Menggunakan datetime_from dan datetime_to untuk ambil data historis
+Dashboard Kualitas Udara Malang - OpenAQ v3
+Menampilkan: Recent, Historis 24 Jam, Prediksi 24 Jam
 """
 
 import os
@@ -17,6 +17,7 @@ import requests
 import time
 from threading import Thread
 import queue
+import json
 
 # Auto-detect JAVA_HOME
 if "JAVA_HOME" not in os.environ:
@@ -32,22 +33,20 @@ if "JAVA_HOME" not in os.environ:
 MODEL_PATH = "ispu_rf_model"
 FEATURES = ["pm1", "relativehumidity", "temperature", "um003"]
 
-# Ambil API key dari secrets
 try:
     OPENAQ_API_KEY = st.secrets["OPENAQ_API_KEY"]
 except:
-    OPENAQ_API_KEY = os.environ.get("OPENAQ_API_KEY")
+    OPENAQ_API_KEY = os.environ.get("OPENAQ_API_KEY", "430a6cbeb038741241c9129a3323543b8a15f7e2b80bd32d9d07b2efb3d66aff")
 
 OPENAQ_BASE_URL = "https://api.openaq.org/v3"
 
-# Lokasi Malang
 LOCATION = {
+    "name": "STT Satyabhakti",
     "latitude": -7.9185093,
     "longitude": 112.651344,
     "radius": 5000
 }
 
-# Kategori ISPU
 CATEGORY_COLOR = {
     "Baik": "#2ecc71",
     "Sedang": "#f1c40f",
@@ -88,12 +87,11 @@ recent_data = None
 
 
 class OpenAQStream:
-    """Streaming data dari OpenAQ v3 - Update 1 jam sekali"""
-    
     def __init__(self, api_key):
         self.api_key = api_key
         self.headers = {"X-API-Key": api_key}
         self.sensor_ids = {}
+        self.location_id = None
         
     def discover_sensors(self):
         """Cari sensor di Malang"""
@@ -114,11 +112,11 @@ class OpenAQStream:
             if resp.status_code == 200:
                 locations = resp.json().get("results", [])
                 if locations:
-                    location_id = locations[0].get("id")
+                    self.location_id = locations[0].get("id")
                     
                     sensor_resp = requests.get(
                         f"{OPENAQ_BASE_URL}/sensors",
-                        params={"location_id": location_id, "limit": 20},
+                        params={"location_id": self.location_id, "limit": 30},
                         headers=self.headers,
                         timeout=10
                     )
@@ -131,100 +129,82 @@ class OpenAQStream:
                                 self.sensor_ids[param] = sensor.get("id")
                         return self.sensor_ids
             return {}
-        except:
+        except Exception as e:
             return {}
     
-    def get_data_by_time_range(self, sensor_id, datetime_from, datetime_to, limit=100):
-        """Ambil data dalam rentang waktu tertentu"""
+    def get_sensor_data(self, sensor_id, datetime_from=None, datetime_to=None, limit=50):
+        """Ambil data sensor dengan rentang waktu"""
         try:
-            params = {
-                "datetime_from": datetime_from,
-                "datetime_to": datetime_to,
-                "limit": limit,
-                "sort": "desc"
-            }
+            params = {"limit": limit, "sort": "desc"}
+            
+            if datetime_from:
+                params["datetime_from"] = datetime_from
+            if datetime_to:
+                params["datetime_to"] = datetime_to
             
             resp = requests.get(
                 f"{OPENAQ_BASE_URL}/sensors/{sensor_id}/measurements",
                 params=params,
                 headers=self.headers,
-                timeout=10
+                timeout=15
             )
             
             if resp.status_code == 200:
-                results = resp.json().get("results", [])
-                return results
+                return resp.json().get("results", [])
             return []
-        except:
+        except Exception as e:
             return []
     
-    def get_latest_data(self):
-        """Ambil data terbaru (1 jam terakhir)"""
+    def fetch_all_data(self):
+        """Fetch semua data: recent + historical"""
         if not self.sensor_ids:
             self.discover_sensors()
         if not self.sensor_ids:
-            return None
+            return None, []
         
-        # Rentang waktu: 1 jam terakhir
-        datetime_to = datetime.now().isoformat() + 'Z'
-        datetime_from = (datetime.now() - timedelta(hours=1)).isoformat() + 'Z'
+        now = datetime.utcnow()
         
-        data = {}
+        # Format waktu untuk OpenAQ
+        # Contoh: 2026-06-27T01:00:00Z
+        datetime_to = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        datetime_from_1h = (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        datetime_from_24h = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        
+        # Dictionary untuk menyimpan data per timestamp
+        data_map = {}
+        recent = None
+        
         for param, sensor_id in self.sensor_ids.items():
-            results = self.get_data_by_time_range(sensor_id, datetime_from, datetime_to, limit=1)
-            if results:
-                data[param] = results[0].get("value")
-                data["timestamp"] = results[0].get("datetime", {}).get("utc", datetime.now().isoformat())
-        
-        if "pm25" in data and "relativehumidity" in data and "temperature" in data:
-            data["pm1"] = data["pm25"] * 0.6
-            data["um003"] = data["pm25"] * 80
-            return data
-        return None
-    
-    def get_historical_data(self, hours=24):
-        """Ambil data historis 24 jam terakhir dengan rentang waktu"""
-        if not self.sensor_ids:
-            self.discover_sensors()
-        if not self.sensor_ids:
-            return []
-        
-        # Rentang waktu: 24 jam terakhir
-        datetime_to = datetime.now().isoformat() + 'Z'
-        datetime_from = (datetime.now() - timedelta(hours=hours)).isoformat() + 'Z'
-        
-        historical = []
-        for param, sensor_id in self.sensor_ids.items():
-            results = self.get_data_by_time_range(sensor_id, datetime_from, datetime_to, limit=hours)
+            # Ambil data 24 jam terakhir
+            results = self.get_sensor_data(sensor_id, datetime_from_24h, datetime_to, limit=50)
+            
+            # Jika tidak ada data 24 jam, ambil data terakhir
+            if not results:
+                results = self.get_sensor_data(sensor_id, limit=50)
+            
             for r in results:
                 timestamp = r.get("datetime", {}).get("utc")
                 value = r.get("value")
                 if timestamp and value is not None:
-                    entry = next((x for x in historical if x.get("timestamp") == timestamp), None)
-                    if entry is None:
-                        entry = {"timestamp": timestamp}
-                        historical.append(entry)
-                    entry[param] = value
+                    if timestamp not in data_map:
+                        data_map[timestamp] = {"timestamp": timestamp}
+                    data_map[timestamp][param] = value
         
-        # Sort by timestamp
+        # Konversi ke list dan sort
+        historical = []
+        for ts, data in data_map.items():
+            if "pm25" in data and "relativehumidity" in data and "temperature" in data:
+                data["pm1"] = data.get("pm25", 0) * 0.6
+                data["um003"] = data.get("pm25", 0) * 80
+                historical.append(data)
+        
         historical.sort(key=lambda x: x.get("timestamp", ""))
         
-        # Isi missing values
-        complete = []
-        for entry in historical:
-            if "pm25" in entry and "relativehumidity" in entry and "temperature" in entry:
-                entry["pm1"] = entry["pm25"] * 0.6
-                entry["um003"] = entry["pm25"] * 80
-                complete.append(entry)
-        
-        return complete
-    
-    def get_recent_data(self):
-        """Ambil data terbaru dari 24 jam terakhir (ambil yang paling baru)"""
-        historical = self.get_historical_data(24)
+        # Ambil data terbaru
         if historical:
-            return historical[-1]
-        return None
+            recent = historical[-1]
+        
+        return recent, historical
 
 
 def stream_worker():
@@ -233,21 +213,18 @@ def stream_worker():
     
     while True:
         try:
-            # Ambil data terbaru (1 jam terakhir)
-            data = stream.get_latest_data()
-            if data:
-                if not data_queue.full():
-                    data_queue.put(data)
-                global recent_data
-                recent_data = data
+            # Fetch semua data sekaligus
+            recent, historical = stream.fetch_all_data()
             
-            # Ambil data historis (24 jam terakhir)
-            hist = stream.get_historical_data(24)
-            if hist:
+            if recent:
+                if not data_queue.full():
+                    data_queue.put(recent)
+                global recent_data
+                recent_data = recent
+            
+            if historical:
                 global history_data
-                history_data = hist
-                if recent_data is None and hist:
-                    recent_data = hist[-1]
+                history_data = historical
             
             time.sleep(3600)  # 1 jam
         except Exception as e:
@@ -293,23 +270,9 @@ def display_metric_card(title, value, unit, color):
     """, unsafe_allow_html=True)
 
 
-def get_recent_data():
-    """Ambil data terbaru dari queue atau recent_data"""
-    latest = None
-    while not data_queue.empty():
-        latest = data_queue.get()
-    if latest:
-        return latest
-    if recent_data:
-        return recent_data
-    if history_data:
-        return history_data[-1]
-    return None
-
-
 def main():
     st.title("🌤️ Dashboard Kualitas Udara Malang")
-    st.caption("Update data setiap 1 jam dari OpenAQ | Fokus: PM2.5")
+    st.caption(f"Update data setiap 1 jam dari OpenAQ | Lokasi: {LOCATION['name']}")
     
     # Start streaming
     if 'stream_thread' not in st.session_state:
@@ -318,29 +281,65 @@ def main():
         st.session_state.stream_thread = thread
     
     # Load model
-    spark, model = load_model()
+    with st.spinner("Memuat model..."):
+        spark, model = load_model()
     
-    # Ambil recent data
-    latest_data = get_recent_data()
+    # ============ AMBIL DATA ============
+    latest_data = None
     
-    # Jika belum ada data, fetch sekali
+    # Coba dari queue
+    while not data_queue.empty():
+        latest_data = data_queue.get()
+    
+    # Coba dari recent_data
+    if latest_data is None and recent_data is not None:
+        latest_data = recent_data
+    
+    # Coba dari history_data
+    if latest_data is None and history_data:
+        latest_data = history_data[-1]
+    
+    # Jika masih belum ada, fetch langsung
     if latest_data is None:
         with st.spinner("Mengambil data dari OpenAQ..."):
             stream = OpenAQStream(OPENAQ_API_KEY)
             stream.discover_sensors()
-            latest_data = stream.get_latest_data()
-            if latest_data:
-                recent_data = latest_data
-                history_data = stream.get_historical_data(24)
+            recent, historical = stream.fetch_all_data()
+            if recent:
+                latest_data = recent
+                recent_data = recent
+                history_data = historical
     
-    # Jika masih tidak ada data, tampilkan pesan
+    # Jika masih tidak ada data
     if latest_data is None:
         st.warning("⚠️ Belum ada data dari OpenAQ. Tunggu update berikutnya.")
+        
+        # Tampilkan status sensor
+        with st.expander("🔍 Status Sensor"):
+            stream = OpenAQStream(OPENAQ_API_KEY)
+            sensors = stream.discover_sensors()
+            if sensors:
+                st.success(f"✅ Ditemukan {len(sensors)} sensor!")
+                for param, sid in sensors.items():
+                    st.write(f"- {param}: sensor_id={sid}")
+            else:
+                st.error("❌ Tidak ditemukan sensor di lokasi Malang")
         st.stop()
     
     # Prediksi kategori
     kategori = predict(spark, model, latest_data)
     latest_data["category"] = kategori
+    
+    # ============ FORMAT TIMESTAMP ============
+    ts = latest_data.get('timestamp', 'N/A')
+    try:
+        # Format: 2026-06-27T01:00:00Z
+        dt = pd.to_datetime(ts)
+        ts_formatted = dt.strftime('%d %b %Y, %H:%M')
+        ts_display = dt.strftime('%Y-%m-%d %H:%M')
+    except:
+        ts_formatted = ts
+        ts_display = ts
     
     # ============ RECENT DATA ============
     st.subheader("📍 Data Terbaru")
@@ -350,13 +349,6 @@ def main():
     with col1:
         color = CATEGORY_COLOR.get(latest_data.get("category", "Baik"), "#95a5a6")
         emoji = CATEGORY_EMOJI.get(latest_data.get("category", "Baik"), "🌤️")
-        
-        ts = latest_data.get('timestamp', 'N/A')
-        try:
-            dt = pd.to_datetime(ts)
-            ts_formatted = dt.strftime('%d %b %Y, %H:%M')
-        except:
-            ts_formatted = ts
         
         st.markdown(f"""
         <div style='
@@ -394,23 +386,25 @@ def main():
     # ============ HISTORIS 24 JAM ============
     st.subheader("📊 Historis 24 Jam Terakhir")
     
-    if history_data:
-        df_hist_all = pd.DataFrame(history_data)
-        df_hist_all['timestamp'] = pd.to_datetime(df_hist_all['timestamp'])
-        df_hist_all = df_hist_all.sort_values('timestamp')
+    if history_data and len(history_data) > 0:
+        df_hist = pd.DataFrame(history_data)
+        df_hist['timestamp'] = pd.to_datetime(df_hist['timestamp'])
+        df_hist = df_hist.sort_values('timestamp')
         
-        # Filter 24 jam terakhir
-        last_ts = df_hist_all['timestamp'].max()
+        # Ambil 24 jam terakhir dari data terakhir
+        last_ts = df_hist['timestamp'].max()
         cutoff = last_ts - timedelta(hours=24)
-        df_hist = df_hist_all[df_hist_all['timestamp'] >= cutoff].copy()
+        df_hist = df_hist[df_hist['timestamp'] >= cutoff].copy()
         
         if len(df_hist) > 0:
+            # Prediksi kategori untuk historis
             categories = []
             for _, row in df_hist.iterrows():
                 cat = predict(spark, model, row.to_dict())
                 categories.append(cat)
             df_hist['category'] = categories
             
+            # Plot
             fig_hist = make_subplots(
                 rows=3, cols=1,
                 subplot_titles=("Kategori", "PM2.5", "Suhu & Kelembapan"),
@@ -491,21 +485,20 @@ def main():
                 most_common = df_hist['category'].mode()[0] if not df_hist['category'].empty else "N/A"
                 st.metric("Kategori Dominan", most_common)
         else:
-            st.info("⏳ Belum cukup data historis")
+            st.info("⏳ Belum cukup data historis (minimal 24 jam)")
     else:
-        st.info("⏳ Menunggu data historis")
+        st.info("⏳ Menunggu data historis...")
     
     st.markdown("---")
     
     # ============ PREDIKSI 24 JAM ============
     st.subheader("🔮 Prediksi 24 Jam Ke Depan")
     
-    # Generate prediksi berdasarkan data terakhir
     future_data = []
     for i in range(1, 25):
         hour_variation = np.sin(i * np.pi / 12) * 0.5
         future = {
-            "timestamp": (datetime.now() + timedelta(hours=i)).isoformat(),
+            "timestamp": (datetime.now() + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "pm1": max(0, latest_data.get("pm1", 10) + hour_variation * 2 + np.random.normal(0, 0.3)),
             "pm25": max(0, latest_data.get("pm25", 15) + hour_variation * 3 + np.random.normal(0, 0.3)),
             "relativehumidity": max(0, min(100, latest_data.get("relativehumidity", 65) - hour_variation * 3 + np.random.normal(0, 0.5))),
@@ -603,14 +596,14 @@ def main():
         pred_24h = df_future['category'].mode()[0] if not df_future['category'].empty else "N/A"
         st.metric("Prediksi 24 Jam", pred_24h)
     
-    ts = latest_data.get('timestamp', 'N/A')
-    try:
-        dt = pd.to_datetime(ts)
-        ts_formatted = dt.strftime('%d %b %Y, %H:%M')
-    except:
-        ts_formatted = ts
-    
-    st.info(f"📊 **Data terakhir:** {ts_formatted} | Update berikutnya: +1 jam")
+    st.info(f"""
+    📊 **Informasi Data**
+    - Sumber: OpenAQ API v3
+    - Lokasi: {LOCATION['name']}
+    - Parameter: PM2.5, PM1, Suhu, Kelembapan, um003
+    - Data terakhir: {ts_display}
+    - Update berikutnya: +1 jam
+    """)
 
 
 if __name__ == "__main__":
