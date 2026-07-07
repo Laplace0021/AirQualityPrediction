@@ -1,7 +1,7 @@
 """
 app.py
 Streaming data dari OpenAQ v3 - Update setiap 1 jam
-Menampilkan: Recent Data, Historis 24 Jam, Prediksi 24 Jam
+Menggunakan datetime_from dan datetime_to untuk ambil data historis
 """
 
 import os
@@ -134,29 +134,47 @@ class OpenAQStream:
         except:
             return {}
     
+    def get_data_by_time_range(self, sensor_id, datetime_from, datetime_to, limit=100):
+        """Ambil data dalam rentang waktu tertentu"""
+        try:
+            params = {
+                "datetime_from": datetime_from,
+                "datetime_to": datetime_to,
+                "limit": limit,
+                "sort": "desc"
+            }
+            
+            resp = requests.get(
+                f"{OPENAQ_BASE_URL}/sensors/{sensor_id}/measurements",
+                params=params,
+                headers=self.headers,
+                timeout=10
+            )
+            
+            if resp.status_code == 200:
+                results = resp.json().get("results", [])
+                return results
+            return []
+        except:
+            return []
+    
     def get_latest_data(self):
-        """Ambil data terbaru dari sensor"""
+        """Ambil data terbaru (1 jam terakhir)"""
         if not self.sensor_ids:
             self.discover_sensors()
         if not self.sensor_ids:
             return None
-            
+        
+        # Rentang waktu: 1 jam terakhir
+        datetime_to = datetime.now().isoformat() + 'Z'
+        datetime_from = (datetime.now() - timedelta(hours=1)).isoformat() + 'Z'
+        
         data = {}
         for param, sensor_id in self.sensor_ids.items():
-            try:
-                resp = requests.get(
-                    f"{OPENAQ_BASE_URL}/sensors/{sensor_id}/measurements",
-                    params={"limit": 1, "sort": "desc"},
-                    headers=self.headers,
-                    timeout=10
-                )
-                if resp.status_code == 200:
-                    results = resp.json().get("results", [])
-                    if results:
-                        data[param] = results[0].get("value")
-                        data["timestamp"] = results[0].get("datetime", {}).get("utc", datetime.now().isoformat())
-            except:
-                continue
+            results = self.get_data_by_time_range(sensor_id, datetime_from, datetime_to, limit=1)
+            if results:
+                data[param] = results[0].get("value")
+                data["timestamp"] = results[0].get("datetime", {}).get("utc", datetime.now().isoformat())
         
         if "pm25" in data and "relativehumidity" in data and "temperature" in data:
             data["pm1"] = data["pm25"] * 0.6
@@ -164,45 +182,49 @@ class OpenAQStream:
             return data
         return None
     
-    def get_historical_data(self, hours=48):
-        """Ambil data historis"""
-        historical = []
+    def get_historical_data(self, hours=24):
+        """Ambil data historis 24 jam terakhir dengan rentang waktu"""
         if not self.sensor_ids:
             self.discover_sensors()
         if not self.sensor_ids:
             return []
         
-        for param, sensor_id in self.sensor_ids.items():
-            try:
-                resp = requests.get(
-                    f"{OPENAQ_BASE_URL}/sensors/{sensor_id}/measurements",
-                    params={"limit": hours, "sort": "desc"},
-                    headers=self.headers,
-                    timeout=10
-                )
-                if resp.status_code == 200:
-                    results = resp.json().get("results", [])
-                    for r in results:
-                        timestamp = r.get("datetime", {}).get("utc")
-                        value = r.get("value")
-                        if timestamp and value is not None:
-                            entry = next((x for x in historical if x.get("timestamp") == timestamp), None)
-                            if entry is None:
-                                entry = {"timestamp": timestamp}
-                                historical.append(entry)
-                            entry[param] = value
-            except:
-                continue
+        # Rentang waktu: 24 jam terakhir
+        datetime_to = datetime.now().isoformat() + 'Z'
+        datetime_from = (datetime.now() - timedelta(hours=hours)).isoformat() + 'Z'
         
+        historical = []
+        for param, sensor_id in self.sensor_ids.items():
+            results = self.get_data_by_time_range(sensor_id, datetime_from, datetime_to, limit=hours)
+            for r in results:
+                timestamp = r.get("datetime", {}).get("utc")
+                value = r.get("value")
+                if timestamp and value is not None:
+                    entry = next((x for x in historical if x.get("timestamp") == timestamp), None)
+                    if entry is None:
+                        entry = {"timestamp": timestamp}
+                        historical.append(entry)
+                    entry[param] = value
+        
+        # Sort by timestamp
         historical.sort(key=lambda x: x.get("timestamp", ""))
         
+        # Isi missing values
         complete = []
         for entry in historical:
             if "pm25" in entry and "relativehumidity" in entry and "temperature" in entry:
                 entry["pm1"] = entry["pm25"] * 0.6
                 entry["um003"] = entry["pm25"] * 80
                 complete.append(entry)
+        
         return complete
+    
+    def get_recent_data(self):
+        """Ambil data terbaru dari 24 jam terakhir (ambil yang paling baru)"""
+        historical = self.get_historical_data(24)
+        if historical:
+            return historical[-1]
+        return None
 
 
 def stream_worker():
@@ -211,6 +233,7 @@ def stream_worker():
     
     while True:
         try:
+            # Ambil data terbaru (1 jam terakhir)
             data = stream.get_latest_data()
             if data:
                 if not data_queue.full():
@@ -218,15 +241,16 @@ def stream_worker():
                 global recent_data
                 recent_data = data
             
-            hist = stream.get_historical_data(48)
+            # Ambil data historis (24 jam terakhir)
+            hist = stream.get_historical_data(24)
             if hist:
                 global history_data
                 history_data = hist
                 if recent_data is None and hist:
                     recent_data = hist[-1]
             
-            time.sleep(3600)
-        except:
+            time.sleep(3600)  # 1 jam
+        except Exception as e:
             time.sleep(60)
 
 
@@ -307,9 +331,9 @@ def main():
             latest_data = stream.get_latest_data()
             if latest_data:
                 recent_data = latest_data
-                history_data = stream.get_historical_data(48)
+                history_data = stream.get_historical_data(24)
     
-    # Jika masih tidak ada data, tampilkan pesan singkat
+    # Jika masih tidak ada data, tampilkan pesan
     if latest_data is None:
         st.warning("⚠️ Belum ada data dari OpenAQ. Tunggu update berikutnya.")
         st.stop()
@@ -375,6 +399,7 @@ def main():
         df_hist_all['timestamp'] = pd.to_datetime(df_hist_all['timestamp'])
         df_hist_all = df_hist_all.sort_values('timestamp')
         
+        # Filter 24 jam terakhir
         last_ts = df_hist_all['timestamp'].max()
         cutoff = last_ts - timedelta(hours=24)
         df_hist = df_hist_all[df_hist_all['timestamp'] >= cutoff].copy()
@@ -475,7 +500,7 @@ def main():
     # ============ PREDIKSI 24 JAM ============
     st.subheader("🔮 Prediksi 24 Jam Ke Depan")
     
-    # Generate prediksi
+    # Generate prediksi berdasarkan data terakhir
     future_data = []
     for i in range(1, 25):
         hour_variation = np.sin(i * np.pi / 12) * 0.5
