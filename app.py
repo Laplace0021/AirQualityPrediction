@@ -9,8 +9,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from pyspark.sql import SparkSession
 from pyspark.ml import PipelineModel
 import requests
@@ -408,6 +406,200 @@ def get_hourly_pattern(history_df, feature_cols):
     return pattern
 
 
+def inject_custom_css():
+    """CSS untuk kartu 'Saat Ini' dan strip per-jam bergaya widget cuaca."""
+    st.markdown("""
+    <style>
+    .wx-card {
+        display: flex;
+        align-items: center;
+        gap: 28px;
+        flex-wrap: wrap;
+        padding: 28px 32px;
+        border-radius: 24px;
+        border: 1px solid #e6eef5;
+        margin-bottom: 8px;
+    }
+    .wx-icon-circle {
+        width: 96px;
+        height: 96px;
+        min-width: 96px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 44px;
+    }
+    .wx-main { flex: 1; min-width: 240px; }
+    .wx-label {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 1.5px;
+        color: #8894a0;
+        text-transform: uppercase;
+        margin-bottom: 4px;
+    }
+    .wx-value { font-size: 44px; font-weight: 800; color: #1b2733; line-height: 1.1; }
+    .wx-unit { font-size: 18px; font-weight: 600; color: #4a5661; margin-left: 4px; }
+    .wx-cat { font-size: 18px; font-weight: 600; margin-left: 14px; }
+    .wx-loc { font-size: 15px; color: #6b7684; margin-left: 8px; }
+    .wx-meta { font-size: 12.5px; color: #8894a0; margin-top: 4px; }
+    .wx-chip-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+    .wx-chip {
+        background: #f4f8fc;
+        border: 1px solid #e5edf5;
+        border-radius: 24px;
+        padding: 7px 16px;
+        font-size: 13.5px;
+        color: #4a5661;
+        white-space: nowrap;
+    }
+    .wx-chip b { color: #1b2733; }
+
+    .hourly-wrap { overflow-x: auto; padding-bottom: 6px; }
+    .hourly-table { border-collapse: collapse; min-width: 100%; }
+    .hourly-table td {
+        text-align: center;
+        padding: 8px 16px;
+        font-size: 13px;
+        white-space: nowrap;
+        vertical-align: middle;
+    }
+    .hourly-table td:first-child {
+        position: sticky;
+        left: 0;
+        background: #ffffff;
+        text-align: left;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        color: #8894a0;
+        text-transform: uppercase;
+        min-width: 128px;
+        z-index: 2;
+    }
+    .hourly-date { font-weight: 700 !important; font-size: 12.5px !important; color: #1b2733 !important; text-align: left !important; }
+    .hourly-hour { color: #8894a0; font-size: 12px; }
+    .hourly-icon { font-size: 22px; }
+    .hourly-val { font-weight: 700; font-size: 14.5px; color: #1b2733; }
+    .hourly-sub { color: #5d6875; font-size: 12.5px; }
+    </style>
+    """, unsafe_allow_html=True)
+
+
+def render_current_card(latest_data, ts_formatted):
+    """Kartu 'Saat Ini' bergaya widget cuaca: ikon kategori besar + chip info."""
+    category = latest_data.get("category", "Baik")
+    color = CATEGORY_COLOR.get(category, "#95a5a6")
+    emoji = CATEGORY_EMOJI.get(category, "🌤️")
+    pm25 = latest_data.get("pm25", 0)
+    pm1 = latest_data.get("pm1", 0)
+    temp = latest_data.get("temperature", 0)
+    hum = latest_data.get("relativehumidity", 0)
+    um003 = latest_data.get("um003", 0)
+
+    st.markdown(f"""
+    <div class="wx-card" style="background: linear-gradient(135deg, {color}18, #ffffff 65%);">
+        <div class="wx-icon-circle" style="background:{color}22; border: 3px solid {color};">
+            {emoji}
+        </div>
+        <div class="wx-main">
+            <div class="wx-label">📍 Saat Ini</div>
+            <div>
+                <span class="wx-value">{pm25:.0f}</span><span class="wx-unit">µg/m³ PM2.5</span>
+                <span class="wx-cat" style="color:{color};">{category}</span>
+                <span class="wx-loc">di {LOCATION['name']}</span>
+            </div>
+            <div class="wx-meta">🕐 {ts_formatted} WIB &nbsp;•&nbsp; {CATEGORY_DESC.get(category, '')}</div>
+            <div class="wx-chip-row">
+                <div class="wx-chip">💧 Kelembapan: <b>{hum:.0f}%</b></div>
+                <div class="wx-chip">🌡️ Suhu: <b>{temp:.1f}°C</b></div>
+                <div class="wx-chip">🫧 PM1: <b>{pm1:.1f} µg/m³</b></div>
+                <div class="wx-chip">🔬 Partikel um003: <b>{um003:.0f}</b></div>
+                <div class="wx-chip">💡 {CATEGORY_ADVICE.get(category, '')}</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_hourly_strip(df, title, key_prefix, page_size=8):
+    """
+    Strip horizontal per jam gaya 'Prakiraan per Jam': kategori, PM2.5, suhu, kelembapan,
+    dengan navigasi ‹ ›. Timestamp dikonversi ke WIB (UTC+7) untuk ditampilkan; df["timestamp"]
+    input harus tz-naive dan merepresentasikan UTC (lihat get_anchor_data / fetch_all_data).
+    """
+    header_col, prev_col, next_col = st.columns([8, 1, 1])
+    with header_col:
+        st.markdown(f"**{title}**")
+
+    if df is None or df.empty:
+        st.info("Tidak ada data untuk ditampilkan.")
+        return
+
+    df = df.copy().reset_index(drop=True)
+    df["timestamp_wib"] = df["timestamp"] + timedelta(hours=7)
+    df = df.sort_values("timestamp_wib").reset_index(drop=True)
+
+    total = len(df)
+    page_key = f"{key_prefix}_page"
+    if page_key not in st.session_state:
+        st.session_state[page_key] = 0
+
+    max_page = max(0, (total - 1) // page_size)
+    st.session_state[page_key] = min(st.session_state[page_key], max_page)
+
+    with prev_col:
+        if st.button("‹", key=f"{key_prefix}_prev", disabled=st.session_state[page_key] <= 0, use_container_width=True):
+            st.session_state[page_key] -= 1
+            st.rerun()
+    with next_col:
+        if st.button("›", key=f"{key_prefix}_next", disabled=st.session_state[page_key] >= max_page, use_container_width=True):
+            st.session_state[page_key] += 1
+            st.rerun()
+
+    start = st.session_state[page_key] * page_size
+    end = start + page_size
+    window = df.iloc[start:end]
+
+    date_cells = hour_cells = icon_cells = val_cells = temp_cells = hum_cells = ""
+    prev_date = None
+    for _, row in window.iterrows():
+        ts = row["timestamp_wib"]
+        date_str = ts.strftime("%-d %b %Y")
+        hour_str = ts.strftime("%H.%M")
+        cat = row.get("category", "Baik")
+        emoji = CATEGORY_EMOJI.get(cat, "🌤️")
+        pm25 = row.get("pm25", 0)
+        temp = row.get("temperature", 0)
+        hum = row.get("relativehumidity", 0)
+
+        date_html = date_str if date_str != prev_date else ""
+        prev_date = date_str
+
+        date_cells += f'<td class="hourly-date">{date_html}</td>'
+        hour_cells += f'<td class="hourly-hour">{hour_str}</td>'
+        icon_cells += f'<td class="hourly-icon" title="{cat}">{emoji}</td>'
+        val_cells += f'<td class="hourly-val">{pm25:.0f}<br><span style="font-weight:400;color:#8894a0;font-size:10.5px;">µg/m³</span></td>'
+        temp_cells += f'<td class="hourly-sub">{temp:.0f}°C</td>'
+        hum_cells += f'<td class="hourly-sub">{hum:.0f}%</td>'
+
+    html = f"""
+    <div class="hourly-wrap">
+    <table class="hourly-table">
+        <tr><td></td>{date_cells}</tr>
+        <tr><td></td>{hour_cells}</tr>
+        <tr><td>Kategori</td>{icon_cells}</tr>
+        <tr><td>PM2.5</td>{val_cells}</tr>
+        <tr><td>Suhu</td>{temp_cells}</tr>
+        <tr><td>Kelembapan</td>{hum_cells}</tr>
+    </table>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+    st.caption(f"Menampilkan jam ke-{start + 1}–{min(end, total)} dari {total} · waktu dalam WIB (UTC+7)")
+
+
 def display_metric_card(title, value, unit, color):
     st.markdown(f"""
     <div style='
@@ -430,6 +622,7 @@ def main():
     
     st.title("🌤️ Dashboard Kualitas Udara Malang")
     st.caption(f"Update data setiap 1 jam dari OpenAQ | Lokasi: {LOCATION['name']}")
+    inject_custom_css()
     
     # Start streaming
     if 'stream_thread' not in st.session_state:
@@ -500,70 +693,37 @@ def main():
     # ============ FORMAT TIMESTAMP ============
     ts = latest_data.get('timestamp', 'N/A')
     try:
-        dt = pd.to_datetime(ts)
-        ts_formatted = dt.strftime('%d %b %Y, %H:%M')
-        ts_display = dt.strftime('%Y-%m-%d %H:%M')
-    except:
+        # latest_data["timestamp"] naive dan merepresentasikan UTC (lihat get_anchor_data),
+        # jadi tambahkan +7 jam supaya tampil sesuai WIB, konsisten dengan strip per-jam.
+        dt_utc = pd.to_datetime(ts)
+        dt_wib = dt_utc + timedelta(hours=7)
+        ts_formatted = dt_wib.strftime('%d %b %Y, %H:%M')
+        ts_display = dt_wib.strftime('%Y-%m-%d %H:%M')
+    except Exception:
         ts_formatted = ts
         ts_display = ts
     
     # ============ RECENT DATA ============
     st.subheader("📍 Data Terbaru")
-    
-    col1, col2, col3, col4 = st.columns([2.5, 1, 1, 1])
-    
-    with col1:
-        color = CATEGORY_COLOR.get(latest_data.get("category", "Baik"), "#95a5a6")
-        emoji = CATEGORY_EMOJI.get(latest_data.get("category", "Baik"), "🌤️")
-        
-        st.markdown(f"""
-        <div style='
-            background: linear-gradient(135deg, {color}20, {color}05);
-            padding: 20px;
-            border-radius: 15px;
-            border: 2px solid {color};
-            text-align: center;
-        '>
-            <div style='font-size: 3rem;'>{emoji}</div>
-            <div style='font-size: 2rem; font-weight: bold; color: {color};'>
-                {latest_data.get('category', 'Baik')}
-            </div>
-            <div style='font-size: 0.9rem; color: #666;'>
-                {CATEGORY_DESC.get(latest_data.get('category', 'Baik'), '')}
-            </div>
-            <div style='margin-top: 10px; font-size: 0.85rem; background: #f0f0f0; padding: 8px; border-radius: 8px;'>
-                💡 {CATEGORY_ADVICE.get(latest_data.get('category', 'Baik'), '')}
-            </div>
-            <div style='margin-top: 8px; font-size: 0.8rem; color: #999;'>
-                🕐 {ts_formatted}
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        display_metric_card("PM2.5", latest_data.get("pm25", 0), "µg/m³", "#e74c3c")
-    with col3:
-        display_metric_card("Suhu", latest_data.get("temperature", 0), "°C", "#3498db")
-    with col4:
-        display_metric_card("Kelembapan", latest_data.get("relativehumidity", 0), "%", "#2ecc71")
-    
+    render_current_card(latest_data, ts_formatted)
+
     st.markdown("---")
     
-    # ============ HISTORIS 24 JAM ============
-    st.subheader("📊 Historis 24 Jam Terakhir")
-    
+    # ============ HISTORIS PER JAM ============
+    st.subheader("📊 Historis Per Jam")
+
     if history_data and len(history_data) > 0:
         df_hist = pd.DataFrame(history_data)
         # utc=True + tz_localize(None): samakan dengan get_anchor_data() supaya tidak
         # crash "Invalid comparison" saat dibandingkan dengan anchor_ts/cutoff di bawah.
         df_hist['timestamp'] = pd.to_datetime(df_hist['timestamp'], utc=True).dt.tz_localize(None)
         df_hist = df_hist.sort_values('timestamp')
-        
+
         # Ambil 24 jam ke belakang berdasarkan anchor time (bukan max data historis)
         anchor_ts = pd.to_datetime(latest_data["timestamp"])
         cutoff = anchor_ts - timedelta(hours=24)
         df_hist = df_hist[(df_hist['timestamp'] >= cutoff) & (df_hist['timestamp'] <= anchor_ts)].copy()
-        
+
         if len(df_hist) > 0:
             # Prediksi kategori untuk historis
             categories = []
@@ -571,79 +731,9 @@ def main():
                 cat = predict(spark, model, row.to_dict())
                 categories.append(cat)
             df_hist['category'] = categories
-            
-            # Plot
-            fig_hist = make_subplots(
-                rows=3, cols=1,
-                subplot_titles=("Kategori", "PM2.5", "Suhu & Kelembapan"),
-                vertical_spacing=0.12,
-                row_heights=[0.25, 0.35, 0.4]
-            )
-            
-            cat_to_num = {"Baik": 1, "Sedang": 2, "Tidak Sehat": 3, "Sangat Tidak Sehat": 4}
-            cat_nums = [cat_to_num.get(c, 0) for c in df_hist['category']]
-            colors = [CATEGORY_COLOR.get(c, "#95a5a6") for c in df_hist['category']]
-            
-            fig_hist.add_trace(
-                go.Scatter(
-                    x=df_hist['timestamp'],
-                    y=cat_nums,
-                    mode='markers+lines',
-                    marker=dict(size=10, color=colors),
-                    line=dict(color='#333', width=1),
-                    text=df_hist['category'],
-                    hovertemplate='%{text}<extra></extra>',
-                    name='Kategori'
-                ),
-                row=1, col=1
-            )
-            fig_hist.update_yaxes(
-                tickvals=[1, 2, 3, 4],
-                ticktext=['Baik', 'Sedang', 'Tidak Sehat', 'Sangat Tidak Sehat'],
-                row=1, col=1,
-                range=[0.5, 4.5]
-            )
-            
-            fig_hist.add_trace(
-                go.Scatter(
-                    x=df_hist['timestamp'],
-                    y=df_hist['pm25'],
-                    mode='lines+markers',
-                    name='PM2.5 (µg/m³)',
-                    line=dict(color='#e74c3c', width=2),
-                    marker=dict(size=6, color='#e74c3c'),
-                    fill='tozeroy',
-                    fillcolor='rgba(231, 76, 60, 0.1)'
-                ),
-                row=2, col=1
-            )
-            
-            fig_hist.add_trace(
-                go.Scatter(
-                    x=df_hist['timestamp'],
-                    y=df_hist['temperature'],
-                    mode='lines+markers',
-                    name='Suhu (°C)',
-                    line=dict(color='#3498db'),
-                    marker=dict(size=6, color='#3498db')
-                ),
-                row=3, col=1
-            )
-            fig_hist.add_trace(
-                go.Scatter(
-                    x=df_hist['timestamp'],
-                    y=df_hist['relativehumidity'],
-                    mode='lines+markers',
-                    name='Kelembapan (%)',
-                    line=dict(color='#2ecc71'),
-                    marker=dict(size=6, color='#2ecc71')
-                ),
-                row=3, col=1
-            )
-            
-            fig_hist.update_layout(height=600, showlegend=True, hovermode='x unified')
-            st.plotly_chart(fig_hist, use_container_width=True)
-            
+
+            render_hourly_strip(df_hist, "Historis 24 Jam Terakhir (WIB)", key_prefix="hist")
+
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("Rata-rata PM2.5", f"{df_hist['pm25'].mean():.1f} µg/m³")
@@ -656,11 +746,11 @@ def main():
             st.info("⏳ Belum cukup data historis (minimal 24 jam)")
     else:
         st.info("⏳ Menunggu data historis...")
-    
+
     st.markdown("---")
     
-    # ============ PREDIKSI 24 JAM ============
-    st.subheader("🔮 Prediksi 24 Jam Ke Depan")
+    # ============ PREDIKSI PER JAM ============
+    st.subheader("🔮 Prediksi Per Jam")
     st.caption(
         "Fitur (PM2.5, PM1, suhu, kelembapan, um003) untuk tiap jam ke depan diestimasi dari "
         "pola nilai per jam-dalam-hari pada data historis yang tersedia (bukan angka acak). "
@@ -674,7 +764,7 @@ def main():
     hourly_pattern = None
     if history_data:
         df_pattern_src = pd.DataFrame(history_data)
-        df_pattern_src["timestamp"] = pd.to_datetime(df_pattern_src["timestamp"])
+        df_pattern_src["timestamp"] = pd.to_datetime(df_pattern_src["timestamp"], utc=True).dt.tz_localize(None)
         available_cols = [c for c in feature_cols if c in df_pattern_src.columns]
         if available_cols:
             hourly_pattern = get_hourly_pattern(df_pattern_src, available_cols)
@@ -710,75 +800,9 @@ def main():
         future_data.append(future)
     
     df_future = pd.DataFrame(future_data)
-    df_future['timestamp'] = pd.to_datetime(df_future['timestamp'])
-    
-    fig_future = make_subplots(
-        rows=3, cols=1,
-        subplot_titles=("Prediksi Kategori", "Prediksi PM2.5", "Prediksi Suhu & Kelembapan"),
-        vertical_spacing=0.12,
-        row_heights=[0.25, 0.35, 0.4]
-    )
-    
-    cat_to_num = {"Baik": 1, "Sedang": 2, "Tidak Sehat": 3, "Sangat Tidak Sehat": 4}
-    future_cat_nums = [cat_to_num.get(c, 0) for c in df_future['category']]
-    future_colors = [CATEGORY_COLOR.get(c, "#95a5a6") for c in df_future['category']]
-    
-    fig_future.add_trace(
-        go.Scatter(
-            x=df_future['timestamp'],
-            y=future_cat_nums,
-            mode='lines+markers',
-            marker=dict(size=10, color=future_colors),
-            line=dict(color='#333', width=1),
-            text=df_future['category'],
-            hovertemplate='%{text}<extra></extra>',
-            name='Prediksi Kategori'
-        ),
-        row=1, col=1
-    )
-    fig_future.update_yaxes(
-        tickvals=[1, 2, 3, 4],
-        ticktext=['Baik', 'Sedang', 'Tidak Sehat', 'Sangat Tidak Sehat'],
-        row=1, col=1,
-        range=[0.5, 4.5]
-    )
-    
-    fig_future.add_trace(
-        go.Scatter(
-            x=df_future['timestamp'],
-            y=df_future['pm25'],
-            mode='lines',
-            name='PM2.5 (µg/m³)',
-            line=dict(color='#e74c3c', width=2),
-            fill='tozeroy',
-            fillcolor='rgba(231, 76, 60, 0.1)'
-        ),
-        row=2, col=1
-    )
-    
-    fig_future.add_trace(
-        go.Scatter(
-            x=df_future['timestamp'],
-            y=df_future['temperature'],
-            mode='lines',
-            name='Suhu (°C)',
-            line=dict(color='#3498db')
-        ),
-        row=3, col=1
-    )
-    fig_future.add_trace(
-        go.Scatter(
-            x=df_future['timestamp'],
-            y=df_future['relativehumidity'],
-            mode='lines',
-            name='Kelembapan (%)',
-            line=dict(color='#2ecc71')
-        ),
-        row=3, col=1
-    )
-    
-    fig_future.update_layout(height=600, showlegend=True, hovermode='x unified')
-    st.plotly_chart(fig_future, use_container_width=True)
+    df_future['timestamp'] = pd.to_datetime(df_future['timestamp'], utc=True).dt.tz_localize(None)
+
+    render_hourly_strip(df_future, "Prediksi 24 Jam Ke Depan (WIB)", key_prefix="future", page_size=8)
     
     # ============ RINGKASAN ============
     st.markdown("---")
