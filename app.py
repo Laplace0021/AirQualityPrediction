@@ -1,7 +1,7 @@
 """
 app.py
 Streaming data dari OpenAQ v3 - Update setiap 1 jam
-Menampilkan: Prediksi 1 hari ke depan + Historis 1 hari ke belakang + Dashboard
+Menampilkan: PM2.5, RH, Temperature, um003
 """
 
 import os
@@ -165,9 +165,11 @@ class OpenAQStream:
             except:
                 continue
         
-        # Cek data lengkap
-        if "pm1" in data and "relativehumidity" in data and "temperature" in data:
-            data["um003"] = data["pm1"] * 100 + np.random.normal(0, 50)
+        # Cek data lengkap (PM25, RH, Temperature)
+        if "pm25" in data and "relativehumidity" in data and "temperature" in data:
+            # PM1 untuk model (dari PM25 * 0.6)
+            data["pm1"] = data["pm25"] * 0.6 + np.random.normal(0, 0.5)
+            data["um003"] = data["pm25"] * 80 + np.random.normal(0, 50)
             data["is_dummy"] = False
             return data
         
@@ -175,11 +177,13 @@ class OpenAQStream:
     
     def get_dummy_data(self):
         """Generate dummy data untuk testing"""
+        pm25 = np.random.uniform(5, 35)
         return {
-            "pm1": np.random.uniform(5, 25),
+            "pm1": pm25 * 0.6 + np.random.uniform(0, 2),
+            "pm25": pm25,
             "relativehumidity": np.random.uniform(50, 80),
             "temperature": np.random.uniform(24, 30),
-            "um003": np.random.uniform(200, 600),
+            "um003": pm25 * 80 + np.random.normal(0, 50),
             "timestamp": datetime.now().isoformat(),
             "is_dummy": True
         }
@@ -195,12 +199,14 @@ class OpenAQStream:
             # Generate dummy historical
             for i in range(24, 0, -1):
                 t = datetime.now() - timedelta(hours=i)
+                pm25 = np.random.uniform(5, 35)
                 historical.append({
                     "timestamp": t.isoformat(),
-                    "pm1": np.random.uniform(5, 25),
+                    "pm1": pm25 * 0.6 + np.random.uniform(0, 2),
+                    "pm25": pm25,
                     "relativehumidity": np.random.uniform(50, 80),
                     "temperature": np.random.uniform(24, 30),
-                    "um003": np.random.uniform(200, 600),
+                    "um003": pm25 * 80 + np.random.normal(0, 50),
                     "is_dummy": True
                 })
             return historical
@@ -221,7 +227,6 @@ class OpenAQStream:
                         timestamp = r.get("datetime", {}).get("utc")
                         value = r.get("value")
                         if timestamp and value is not None:
-                            # Cari existing entry
                             entry = next((x for x in historical if x.get("timestamp") == timestamp), None)
                             if entry is None:
                                 entry = {"timestamp": timestamp}
@@ -235,14 +240,16 @@ class OpenAQStream:
         
         # Isi missing values dengan dummy
         for entry in historical:
+            if "pm25" not in entry:
+                entry["pm25"] = np.random.uniform(5, 35)
             if "pm1" not in entry:
-                entry["pm1"] = np.random.uniform(5, 25)
+                entry["pm1"] = entry["pm25"] * 0.6 + np.random.uniform(0, 2)
             if "relativehumidity" not in entry:
                 entry["relativehumidity"] = np.random.uniform(50, 80)
             if "temperature" not in entry:
                 entry["temperature"] = np.random.uniform(24, 30)
             if "um003" not in entry:
-                entry["um003"] = entry["pm1"] * 100 + np.random.normal(0, 50)
+                entry["um003"] = entry["pm25"] * 80 + np.random.normal(0, 50)
             entry["is_dummy"] = False
         
         return historical[-24:]  # 24 jam terakhir
@@ -313,7 +320,7 @@ def display_metric_card(title, value, unit, color):
 
 def main():
     st.title("🌤️ Dashboard Kualitas Udara Malang")
-    st.caption("Update data setiap 1 jam dari OpenAQ")
+    st.caption("Update data setiap 1 jam dari OpenAQ | Fokus: PM2.5")
     
     # Start streaming
     if 'stream_thread' not in st.session_state:
@@ -347,7 +354,7 @@ def main():
     # Row 1: Current Status
     st.subheader("📍 Kondisi Saat Ini")
     
-    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+    col1, col2, col3, col4 = st.columns([2.5, 1, 1, 1])
     
     with col1:
         color = CATEGORY_COLOR.get(latest_data.get("category", "Baik"), "#95a5a6")
@@ -380,13 +387,13 @@ def main():
         """, unsafe_allow_html=True)
     
     with col2:
-        display_metric_card("Suhu", latest_data.get("temperature", 0), "°C", "#e74c3c")
+        display_metric_card("PM2.5", latest_data.get("pm25", 0), "µg/m³", "#e74c3c")
     
     with col3:
-        display_metric_card("Kelembapan", latest_data.get("relativehumidity", 0), "%", "#3498db")
+        display_metric_card("Suhu", latest_data.get("temperature", 0), "°C", "#3498db")
     
     with col4:
-        display_metric_card("PM1", latest_data.get("pm1", 0), "µg/m³", "#27ae60")
+        display_metric_card("Kelembapan", latest_data.get("relativehumidity", 0), "%", "#2ecc71")
     
     st.markdown("---")
     
@@ -408,10 +415,15 @@ def main():
         
         # Plot historis
         fig_hist = make_subplots(
-            rows=3, cols=1,
-            subplot_titles=("Kategori Kualitas Udara", "Suhu & Kelembapan", "PM1"),
-            vertical_spacing=0.1,
-            row_heights=[0.3, 0.35, 0.35]
+            rows=4, cols=1,
+            subplot_titles=(
+                "Kategori Kualitas Udara",
+                "PM2.5",
+                "Suhu & Kelembapan",
+                "Particle Count (um003)"
+            ),
+            vertical_spacing=0.08,
+            row_heights=[0.2, 0.3, 0.25, 0.25]
         )
         
         # Plot kategori
@@ -424,7 +436,7 @@ def main():
                 x=df_hist['timestamp'],
                 y=cat_nums,
                 mode='markers+lines',
-                marker=dict(size=10, color=colors),
+                marker=dict(size=8, color=colors),
                 line=dict(color='#333', width=1),
                 text=df_hist['category'],
                 hovertemplate='%{text}<extra></extra>',
@@ -435,7 +447,23 @@ def main():
         fig_hist.update_yaxes(
             tickvals=[1, 2, 3, 4],
             ticktext=['Baik', 'Sedang', 'Tidak Sehat', 'Sangat Tidak Sehat'],
-            row=1, col=1
+            row=1, col=1,
+            range=[0.5, 4.5]
+        )
+        
+        # Plot PM2.5
+        fig_hist.add_trace(
+            go.Scatter(
+                x=df_hist['timestamp'],
+                y=df_hist['pm25'],
+                mode='lines+markers',
+                name='PM2.5 (µg/m³)',
+                line=dict(color='#e74c3c', width=2),
+                marker=dict(size=6, color='#e74c3c'),
+                fill='tozeroy',
+                fillcolor='rgba(231, 76, 60, 0.1)'
+            ),
+            row=2, col=1
         )
         
         # Plot suhu & kelembapan
@@ -445,10 +473,10 @@ def main():
                 y=df_hist['temperature'],
                 mode='lines+markers',
                 name='Suhu (°C)',
-                line=dict(color='#e74c3c'),
-                marker=dict(size=6, color='#e74c3c')
+                line=dict(color='#3498db'),
+                marker=dict(size=6, color='#3498db')
             ),
-            row=2, col=1
+            row=3, col=1
         )
         fig_hist.add_trace(
             go.Scatter(
@@ -456,58 +484,65 @@ def main():
                 y=df_hist['relativehumidity'],
                 mode='lines+markers',
                 name='Kelembapan (%)',
-                line=dict(color='#3498db'),
-                marker=dict(size=6, color='#3498db')
-            ),
-            row=2, col=1
-        )
-        
-        # Plot PM1
-        fig_hist.add_trace(
-            go.Bar(
-                x=df_hist['timestamp'],
-                y=df_hist['pm1'],
-                name='PM1 (µg/m³)',
-                marker_color='#27ae60',
-                opacity=0.7
+                line=dict(color='#2ecc71'),
+                marker=dict(size=6, color='#2ecc71')
             ),
             row=3, col=1
         )
         
+        # Plot um003
+        fig_hist.add_trace(
+            go.Scatter(
+                x=df_hist['timestamp'],
+                y=df_hist['um003'],
+                mode='lines+markers',
+                name='Particle Count (um003)',
+                line=dict(color='#9b59b6'),
+                marker=dict(size=6, color='#9b59b6'),
+                fill='tozeroy',
+                fillcolor='rgba(155, 89, 182, 0.1)'
+            ),
+            row=4, col=1
+        )
+        
         fig_hist.update_layout(
-            height=700,
+            height=800,
             showlegend=True,
             hovermode='x unified'
         )
         
         st.plotly_chart(fig_hist, use_container_width=True)
         
-        # Tampilkan stats
-        col1, col2, col3 = st.columns(3)
+        # Tampilkan stats PM2.5
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
-            avg_pm1 = df_hist['pm1'].mean()
-            st.metric("Rata-rata PM1", f"{avg_pm1:.1f} µg/m³")
+            avg_pm25 = df_hist['pm25'].mean()
+            st.metric("Rata-rata PM2.5", f"{avg_pm25:.1f} µg/m³")
         with col2:
-            min_pm1 = df_hist['pm1'].min()
-            max_pm1 = df_hist['pm1'].max()
-            st.metric("Range PM1", f"{min_pm1:.1f} - {max_pm1:.1f} µg/m³")
+            min_pm25 = df_hist['pm25'].min()
+            max_pm25 = df_hist['pm25'].max()
+            st.metric("Range PM2.5", f"{min_pm25:.1f} - {max_pm25:.1f} µg/m³")
         with col3:
+            latest_pm25 = df_hist['pm25'].iloc[-1]
+            st.metric("PM2.5 Terakhir", f"{latest_pm25:.1f} µg/m³")
+        with col4:
             most_common = df_hist['category'].mode()[0] if not df_hist['category'].empty else "N/A"
             st.metric("Kategori Dominan", most_common)
     
     st.markdown("---")
     
     # ============ PREDIKSI 1 HARI KEDEPAN ============
-    st.subheader("🔮 Prediksi 1 Hari Ke Depan")
+    st.subheader("🔮 Prediksi 24 Jam Ke Depan")
     
     # Generate prediksi 24 jam ke depan
     future_data = []
     for i in range(1, 25):
-        # Simulasi variasi natural
         hour_variation = np.sin(i * np.pi / 12) * 0.5
+        base_pm25 = latest_data.get("pm25", 15)
         future = {
             "timestamp": (datetime.now() + timedelta(hours=i)).isoformat(),
             "pm1": max(0, latest_data.get("pm1", 10) + np.random.normal(0, 1) + hour_variation * 2),
+            "pm25": max(0, base_pm25 + np.random.normal(0, 2) + hour_variation * 3),
             "relativehumidity": max(0, min(100, latest_data.get("relativehumidity", 65) + np.random.normal(0, 2) - hour_variation * 3)),
             "temperature": max(0, min(45, latest_data.get("temperature", 27) + np.random.normal(0, 0.5) + hour_variation)),
             "um003": max(0, latest_data.get("um003", 300) + np.random.normal(0, 30) + hour_variation * 50),
@@ -520,10 +555,15 @@ def main():
     
     # Plot prediksi
     fig_future = make_subplots(
-        rows=3, cols=1,
-        subplot_titles=("Prediksi Kategori 24 Jam", "Prediksi Suhu & Kelembapan", "Prediksi PM1"),
-        vertical_spacing=0.1,
-        row_heights=[0.3, 0.35, 0.35]
+        rows=4, cols=1,
+        subplot_titles=(
+            "Prediksi Kategori 24 Jam",
+            "Prediksi PM2.5",
+            "Prediksi Suhu & Kelembapan",
+            "Prediksi Particle Count (um003)"
+        ),
+        vertical_spacing=0.08,
+        row_heights=[0.2, 0.3, 0.25, 0.25]
     )
     
     # Plot kategori prediksi
@@ -536,7 +576,7 @@ def main():
             x=df_future['timestamp'],
             y=future_cat_nums,
             mode='lines+markers',
-            marker=dict(size=8, color=future_colors),
+            marker=dict(size=6, color=future_colors),
             line=dict(color='#333', width=1),
             text=df_future['category'],
             hovertemplate='%{text}<extra></extra>',
@@ -547,7 +587,22 @@ def main():
     fig_future.update_yaxes(
         tickvals=[1, 2, 3, 4],
         ticktext=['Baik', 'Sedang', 'Tidak Sehat', 'Sangat Tidak Sehat'],
-        row=1, col=1
+        row=1, col=1,
+        range=[0.5, 4.5]
+    )
+    
+    # Plot PM2.5
+    fig_future.add_trace(
+        go.Scatter(
+            x=df_future['timestamp'],
+            y=df_future['pm25'],
+            mode='lines',
+            name='PM2.5 (µg/m³)',
+            line=dict(color='#e74c3c', width=2),
+            fill='tozeroy',
+            fillcolor='rgba(231, 76, 60, 0.1)'
+        ),
+        row=2, col=1
     )
     
     # Plot suhu & kelembapan
@@ -557,9 +612,9 @@ def main():
             y=df_future['temperature'],
             mode='lines',
             name='Suhu (°C)',
-            line=dict(color='#e74c3c')
+            line=dict(color='#3498db')
         ),
-        row=2, col=1
+        row=3, col=1
     )
     fig_future.add_trace(
         go.Scatter(
@@ -567,27 +622,27 @@ def main():
             y=df_future['relativehumidity'],
             mode='lines',
             name='Kelembapan (%)',
-            line=dict(color='#3498db')
-        ),
-        row=2, col=1
-    )
-    
-    # Plot PM1
-    fig_future.add_trace(
-        go.Scatter(
-            x=df_future['timestamp'],
-            y=df_future['pm1'],
-            mode='lines',
-            name='PM1 (µg/m³)',
-            line=dict(color='#27ae60'),
-            fill='tozeroy',
-            fillcolor='rgba(39, 174, 96, 0.2)'
+            line=dict(color='#2ecc71')
         ),
         row=3, col=1
     )
     
+    # Plot um003
+    fig_future.add_trace(
+        go.Scatter(
+            x=df_future['timestamp'],
+            y=df_future['um003'],
+            mode='lines',
+            name='Particle Count (um003)',
+            line=dict(color='#9b59b6'),
+            fill='tozeroy',
+            fillcolor='rgba(155, 89, 182, 0.1)'
+        ),
+        row=4, col=1
+    )
+    
     fig_future.update_layout(
-        height=700,
+        height=800,
         showlegend=True,
         hovermode='x unified'
     )
@@ -598,29 +653,25 @@ def main():
     st.markdown("---")
     st.subheader("📋 Ringkasan")
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
-        # Kategori saat ini
         current_cat = latest_data.get("category", "Baik")
         st.metric("Kondisi Saat Ini", current_cat)
     
     with col2:
-        # Prediksi 6 jam depan
-        next_6h = df_future.head(6)['category']
-        if not next_6h.empty:
-            pred_6h = next_6h.mode()[0]
-            st.metric("Prediksi 6 Jam", pred_6h)
+        current_pm25 = latest_data.get("pm25", 0)
+        st.metric("PM2.5 Saat Ini", f"{current_pm25:.1f} µg/m³")
     
     with col3:
-        # Prediksi 12 jam depan
-        next_12h = df_future.head(12)['category']
-        if not next_12h.empty:
-            pred_12h = next_12h.mode()[0]
-            st.metric("Prediksi 12 Jam", pred_12h)
+        pred_6h = df_future.head(6)['category'].mode()[0] if not df_future.head(6)['category'].empty else "N/A"
+        st.metric("Prediksi 6 Jam", pred_6h)
     
     with col4:
-        # Prediksi 24 jam depan
+        pred_12h = df_future.head(12)['category'].mode()[0] if not df_future.head(12)['category'].empty else "N/A"
+        st.metric("Prediksi 12 Jam", pred_12h)
+    
+    with col5:
         pred_24h = df_future['category'].mode()[0] if not df_future['category'].empty else "N/A"
         st.metric("Prediksi 24 Jam", pred_24h)
     
@@ -630,6 +681,7 @@ def main():
     - Sumber: OpenAQ API v3
     - Update: Setiap 1 jam
     - Lokasi: STT Satyabhakti Malang
+    - Parameter: PM2.5, Suhu, Kelembapan, Particle Count
     - Data terakhir: {latest_data.get('timestamp', 'N/A')}
     - Status: {'🟢 Data Real' if not latest_data.get('is_dummy', True) else '🟡 Data Simulasi'}
     """)
