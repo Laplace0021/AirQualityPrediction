@@ -1,0 +1,1 @@
+{"class":"org.apache.spark.ml.feature.StringIndexerModel","timestamp":1783399929269,"sparkVersion":"4.0.3","uid":"StringIndexer_5b97fc6a4395","paramMap":{"inputCol":"kategori_ispu","handleInvalid":"keep","outputCol":"label_idx"},"defaultParamMap":{"stringOrderType":"frequencyDesc","handleInvalid":"error","outputCol":"StringIndexer_5b97fc6a4395__output"}}
