@@ -73,9 +73,10 @@ CATEGORY_ADVICE = {
 }
 
 st.set_page_config(
-    page_title="🌤️ Dashboard Kualitas Udara Malang",
+    page_title="Dashboard Kualitas Udara Malang",
     page_icon="🌤️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
 data_queue = queue.Queue(maxsize=100)
@@ -410,6 +411,24 @@ def inject_custom_css():
     """CSS untuk kartu 'Saat Ini' dan strip per-jam bergaya widget cuaca."""
     st.markdown("""
     <style>
+    /* Global Styles */
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: 800;
+        color: #1a2634;
+        margin-bottom: 0.25rem;
+        letter-spacing: -0.5px;
+    }
+    
+    .sub-header {
+        color: #6b7a8a;
+        font-size: 1rem;
+        margin-bottom: 2rem;
+        border-bottom: 2px solid #f0f4f8;
+        padding-bottom: 1rem;
+    }
+    
+    /* Main Card */
     .wx-card {
         display: flex;
         align-items: center;
@@ -418,8 +437,17 @@ def inject_custom_css():
         padding: 28px 32px;
         border-radius: 24px;
         border: 1px solid #e6eef5;
+        background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+        box-shadow: 0 4px 20px rgba(0,0,0,0.04);
         margin-bottom: 8px;
+        transition: all 0.3s ease;
     }
+    
+    .wx-card:hover {
+        box-shadow: 0 8px 30px rgba(0,0,0,0.08);
+        transform: translateY(-2px);
+    }
+    
     .wx-icon-circle {
         width: 96px;
         height: 96px;
@@ -429,8 +457,13 @@ def inject_custom_css():
         align-items: center;
         justify-content: center;
         font-size: 44px;
+        background: #f0f4f8;
+        border: 3px solid #e0e8ef;
+        transition: all 0.3s ease;
     }
+    
     .wx-main { flex: 1; min-width: 240px; }
+    
     .wx-label {
         font-size: 12px;
         font-weight: 700;
@@ -439,12 +472,46 @@ def inject_custom_css():
         text-transform: uppercase;
         margin-bottom: 4px;
     }
-    .wx-value { font-size: 44px; font-weight: 800; color: #1b2733; line-height: 1.1; }
-    .wx-unit { font-size: 18px; font-weight: 600; color: #4a5661; margin-left: 4px; }
-    .wx-cat { font-size: 18px; font-weight: 600; margin-left: 14px; }
-    .wx-loc { font-size: 15px; color: #6b7684; margin-left: 8px; }
-    .wx-meta { font-size: 12.5px; color: #8894a0; margin-top: 4px; }
-    .wx-chip-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+    
+    .wx-value { 
+        font-size: 44px; 
+        font-weight: 800; 
+        color: #1b2733; 
+        line-height: 1.1;
+    }
+    
+    .wx-unit { 
+        font-size: 18px; 
+        font-weight: 600; 
+        color: #4a5661; 
+        margin-left: 4px; 
+    }
+    
+    .wx-cat { 
+        font-size: 18px; 
+        font-weight: 600; 
+        margin-left: 14px; 
+    }
+    
+    .wx-loc { 
+        font-size: 15px; 
+        color: #6b7684; 
+        margin-left: 8px; 
+    }
+    
+    .wx-meta { 
+        font-size: 12.5px; 
+        color: #8894a0; 
+        margin-top: 4px; 
+    }
+    
+    .wx-chip-row { 
+        display: flex; 
+        flex-wrap: wrap; 
+        gap: 10px; 
+        margin-top: 16px; 
+    }
+    
     .wx-chip {
         background: #f4f8fc;
         border: 1px solid #e5edf5;
@@ -453,22 +520,87 @@ def inject_custom_css():
         font-size: 13.5px;
         color: #4a5661;
         white-space: nowrap;
+        transition: all 0.2s ease;
     }
+    
+    .wx-chip:hover {
+        background: #e8f0f8;
+        transform: scale(1.02);
+    }
+    
     .wx-chip b { color: #1b2733; }
-
-    .hourly-wrap { overflow-x: auto; padding-bottom: 6px; }
-    .hourly-table { border-collapse: collapse; min-width: 100%; }
+    
+    /* Metric Cards */
+    .metric-card {
+        background: white;
+        border: 1px solid #e6eef5;
+        border-radius: 16px;
+        padding: 20px;
+        text-align: center;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        transition: all 0.3s ease;
+        height: 100%;
+    }
+    
+    .metric-card:hover {
+        box-shadow: 0 6px 20px rgba(0,0,0,0.08);
+        transform: translateY(-3px);
+    }
+    
+    .metric-card .label {
+        font-size: 0.8rem;
+        color: #8894a0;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 8px;
+    }
+    
+    .metric-card .value {
+        font-size: 2rem;
+        font-weight: 800;
+        color: #1b2733;
+    }
+    
+    .metric-card .sub {
+        font-size: 0.75rem;
+        color: #8894a0;
+        margin-top: 4px;
+    }
+    
+    /* Hourly Strip */
+    .hourly-wrap { 
+        overflow-x: auto; 
+        padding-bottom: 6px; 
+        margin: 8px 0;
+    }
+    
+    .hourly-table { 
+        border-collapse: collapse; 
+        min-width: 100%;
+        background: white;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+    
     .hourly-table td {
         text-align: center;
-        padding: 8px 16px;
+        padding: 10px 16px;
         font-size: 13px;
         white-space: nowrap;
         vertical-align: middle;
+        border-bottom: 1px solid #f0f4f8;
     }
+    
+    .hourly-table tr:last-child td {
+        border-bottom: none;
+    }
+    
     .hourly-table td:first-child {
         position: sticky;
         left: 0;
-        background: #ffffff;
+        background: #f8fafc;
         text-align: left;
         font-size: 11px;
         font-weight: 700;
@@ -477,12 +609,94 @@ def inject_custom_css():
         text-transform: uppercase;
         min-width: 128px;
         z-index: 2;
+        border-right: 1px solid #e6eef5;
     }
-    .hourly-date { font-weight: 700 !important; font-size: 12.5px !important; color: #1b2733 !important; text-align: left !important; }
-    .hourly-hour { color: #8894a0; font-size: 12px; }
-    .hourly-icon { font-size: 22px; }
-    .hourly-val { font-weight: 700; font-size: 14.5px; color: #1b2733; }
-    .hourly-sub { color: #5d6875; font-size: 12.5px; }
+    
+    .hourly-date { 
+        font-weight: 700 !important; 
+        font-size: 12.5px !important; 
+        color: #1b2733 !important; 
+        text-align: left !important; 
+    }
+    
+    .hourly-hour { 
+        color: #8894a0; 
+        font-size: 12px; 
+    }
+    
+    .hourly-icon { 
+        font-size: 24px; 
+    }
+    
+    .hourly-val { 
+        font-weight: 700; 
+        font-size: 15px; 
+        color: #1b2733; 
+    }
+    
+    .hourly-sub { 
+        color: #5d6875; 
+        font-size: 12.5px; 
+    }
+    
+    /* Section Headers */
+    .section-header {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #1a2634;
+        margin-top: 2rem;
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    
+    .section-header span {
+        font-size: 1.8rem;
+    }
+    
+    /* Info Box */
+    .info-box {
+        background: #f8fafc;
+        border: 1px solid #e6eef5;
+        border-radius: 12px;
+        padding: 16px 20px;
+        margin-top: 16px;
+    }
+    
+    .info-box .title {
+        font-weight: 600;
+        color: #1b2733;
+        margin-bottom: 4px;
+    }
+    
+    .info-box .content {
+        color: #6b7a8a;
+        font-size: 0.9rem;
+        line-height: 1.6;
+    }
+    
+    /* Responsive */
+    @media (max-width: 768px) {
+        .wx-card {
+            flex-direction: column;
+            align-items: flex-start;
+            padding: 20px;
+        }
+        
+        .wx-value {
+            font-size: 32px;
+        }
+        
+        .metric-card .value {
+            font-size: 1.5rem;
+        }
+        
+        .hourly-table td {
+            padding: 8px 12px;
+            font-size: 12px;
+        }
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -499,7 +713,7 @@ def render_current_card(latest_data, ts_formatted):
     um003 = latest_data.get("um003", 0)
 
     st.markdown(f"""
-    <div class="wx-card" style="background: linear-gradient(135deg, {color}18, #ffffff 65%);">
+    <div class="wx-card">
         <div class="wx-icon-circle" style="background:{color}22; border: 3px solid {color};">
             {emoji}
         </div>
@@ -515,12 +729,34 @@ def render_current_card(latest_data, ts_formatted):
                 <div class="wx-chip">💧 Kelembapan: <b>{hum:.0f}%</b></div>
                 <div class="wx-chip">🌡️ Suhu: <b>{temp:.1f}°C</b></div>
                 <div class="wx-chip">🫧 PM1: <b>{pm1:.1f} µg/m³</b></div>
-                <div class="wx-chip">🔬 Partikel um003: <b>{um003:.0f}</b></div>
-                <div class="wx-chip">💡 {CATEGORY_ADVICE.get(category, '')}</div>
+                <div class="wx-chip">🔬 Partikel: <b>{um003:.0f}</b></div>
+                <div class="wx-chip" style="background:{color}22; border-color:{color};">💡 {CATEGORY_ADVICE.get(category, '')}</div>
             </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
+
+
+def render_metric_cards(data, category):
+    """Render metric cards for additional data points."""
+    cols = st.columns(5)
+    
+    metrics = [
+        ("PM2.5", f"{data.get('pm25', 0):.1f}", "µg/m³", "#2ecc71"),
+        ("PM1", f"{data.get('pm1', 0):.1f}", "µg/m³", "#3498db"),
+        ("Suhu", f"{data.get('temperature', 0):.1f}", "°C", "#e67e22"),
+        ("Kelembapan", f"{data.get('relativehumidity', 0):.0f}", "%", "#9b59b6"),
+        ("Kategori", category, "", CATEGORY_COLOR.get(category, "#95a5a6")),
+    ]
+    
+    for idx, (label, value, unit, color) in enumerate(metrics):
+        with cols[idx]:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="label">{label}</div>
+                <div class="value" style="color:{color};">{value} {unit}</div>
+            </div>
+            """, unsafe_allow_html=True)
 
 
 def render_hourly_strip(df, title, key_prefix, page_size=8):
@@ -531,7 +767,7 @@ def render_hourly_strip(df, title, key_prefix, page_size=8):
     """
     header_col, prev_col, next_col = st.columns([8, 1, 1])
     with header_col:
-        st.markdown(f"**{title}**")
+        st.markdown(f'<div style="font-size:1.1rem; font-weight:600; color:#1a2634;">{title}</div>', unsafe_allow_html=True)
 
     if df is None or df.empty:
         st.info("Tidak ada data untuk ditampilkan.")
@@ -620,9 +856,12 @@ def display_metric_card(title, value, unit, color):
 def main():
     global recent_data, history_data
     
-    st.title("🌤️ Dashboard Kualitas Udara Malang")
-    st.caption(f"Update data setiap 1 jam dari OpenAQ | Lokasi: {LOCATION['name']}")
+    # Custom CSS
     inject_custom_css()
+    
+    # Header
+    st.markdown('<div class="main-header">🌤️ Dashboard Kualitas Udara Malang</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="sub-header">📍 {LOCATION["name"]} · Update data setiap 1 jam dari OpenAQ</div>', unsafe_allow_html=True)
     
     # Start streaming
     if 'stream_thread' not in st.session_state:
@@ -658,178 +897,4 @@ def main():
         st.warning("⚠️ Belum ada data dari OpenAQ. Tunggu update berikutnya.")
         
         # Tampilkan status sensor
-        with st.expander("🔍 Status Sensor", expanded=True):
-            stream = OpenAQStream(OPENAQ_API_KEY)
-            sensors = stream.discover_sensors()
-            if sensors:
-                st.success(f"✅ Ditemukan {len(sensors)} sensor!")
-                for param, sid in sensors.items():
-                    st.write(f"- {param}: sensor_id={sid}")
-
-                st.write("**Mencoba ambil & gabungkan data measurement...**")
-                recent_try, historical_try = stream.fetch_all_data()
-                st.write("**Detail debug fetch:**")
-                st.json(stream.last_debug)
-
-                if not historical_try:
-                    st.error("❌ Sensor ditemukan, tapi belum berhasil menggabungkan data measurement jadi baris historis.")
-                else:
-                    st.success(f"✅ Berhasil menggabungkan {len(historical_try)} baris data per jam.")
-            else:
-                st.error("❌ Tidak ditemukan sensor di lokasi Malang")
-                st.write("**Detail debug:**")
-                st.json(stream.last_debug)
-                st.caption(
-                    "Cek: status code 401/403 → API key tidak valid atau perlu re-generate di "
-                    "explore.openaq.org. Status 200 tapi locations_found=0 → tidak ada lokasi "
-                    "OpenAQ dalam radius yang ditentukan (coba perbesar LOCATION['radius'])."
-                )
-        st.stop()
-    
-    # Prediksi kategori
-    kategori = predict(spark, model, latest_data)
-    latest_data["category"] = kategori
-    
-    # ============ FORMAT TIMESTAMP ============
-    ts = latest_data.get('timestamp', 'N/A')
-    try:
-        # latest_data["timestamp"] naive dan merepresentasikan UTC (lihat get_anchor_data),
-        # jadi tambahkan +7 jam supaya tampil sesuai WIB, konsisten dengan strip per-jam.
-        dt_utc = pd.to_datetime(ts)
-        dt_wib = dt_utc + timedelta(hours=7)
-        ts_formatted = dt_wib.strftime('%d %b %Y, %H:%M')
-        ts_display = dt_wib.strftime('%Y-%m-%d %H:%M')
-    except Exception:
-        ts_formatted = ts
-        ts_display = ts
-    
-    # ============ RECENT DATA ============
-    st.subheader("📍 Data Terbaru")
-    render_current_card(latest_data, ts_formatted)
-
-    st.markdown("---")
-    
-    # ============ HISTORIS PER JAM ============
-    st.subheader("📊 Historis Per Jam")
-
-    if history_data and len(history_data) > 0:
-        df_hist = pd.DataFrame(history_data)
-        # utc=True + tz_localize(None): samakan dengan get_anchor_data() supaya tidak
-        # crash "Invalid comparison" saat dibandingkan dengan anchor_ts/cutoff di bawah.
-        df_hist['timestamp'] = pd.to_datetime(df_hist['timestamp'], utc=True).dt.tz_localize(None)
-        df_hist = df_hist.sort_values('timestamp')
-
-        # Ambil 24 jam ke belakang berdasarkan anchor time (bukan max data historis)
-        anchor_ts = pd.to_datetime(latest_data["timestamp"])
-        cutoff = anchor_ts - timedelta(hours=24)
-        df_hist = df_hist[(df_hist['timestamp'] >= cutoff) & (df_hist['timestamp'] <= anchor_ts)].copy()
-
-        if len(df_hist) > 0:
-            # Prediksi kategori untuk historis
-            categories = []
-            for _, row in df_hist.iterrows():
-                cat = predict(spark, model, row.to_dict())
-                categories.append(cat)
-            df_hist['category'] = categories
-
-            render_hourly_strip(df_hist, "Historis 24 Jam Terakhir (WIB)", key_prefix="hist")
-
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Rata-rata PM2.5", f"{df_hist['pm25'].mean():.1f} µg/m³")
-            with col2:
-                st.metric("Min - Max PM2.5", f"{df_hist['pm25'].min():.1f} - {df_hist['pm25'].max():.1f} µg/m³")
-            with col3:
-                most_common = df_hist['category'].mode()[0] if not df_hist['category'].empty else "N/A"
-                st.metric("Kategori Dominan", most_common)
-        else:
-            st.info("⏳ Belum cukup data historis (minimal 24 jam)")
-    else:
-        st.info("⏳ Menunggu data historis...")
-
-    st.markdown("---")
-    
-    # ============ PREDIKSI PER JAM ============
-    st.subheader("🔮 Prediksi Per Jam")
-    st.caption(
-        "Fitur (PM2.5, PM1, suhu, kelembapan, um003) untuk tiap jam ke depan diestimasi dari "
-        "pola nilai per jam-dalam-hari pada data historis yang tersedia (bukan angka acak). "
-        "Random Forest kemudian mengklasifikasikan kategori ISPU dari fitur hasil estimasi tersebut — "
-        "sesuai fungsi aslinya sebagai model klasifikasi, bukan regresi PM2.5."
-    )
-
-    anchor_ts = pd.to_datetime(latest_data["timestamp"])
-    feature_cols = ["pm1", "pm25", "relativehumidity", "temperature", "um003"]
-
-    hourly_pattern = None
-    if history_data:
-        df_pattern_src = pd.DataFrame(history_data)
-        df_pattern_src["timestamp"] = pd.to_datetime(df_pattern_src["timestamp"], utc=True).dt.tz_localize(None)
-        available_cols = [c for c in feature_cols if c in df_pattern_src.columns]
-        if available_cols:
-            hourly_pattern = get_hourly_pattern(df_pattern_src, available_cols)
-
-    future_data = []
-    for i in range(1, 25):
-        future_time = anchor_ts + timedelta(hours=i)
-        target_hour = future_time.hour
-
-        if hourly_pattern is not None:
-            # Estimasi fitur dari pola historis pada jam yang sama
-            base = hourly_pattern.loc[target_hour]
-            future = {
-                "timestamp": future_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "pm1": max(0, base.get("pm1", latest_data.get("pm1", 10))),
-                "pm25": max(0, base.get("pm25", latest_data.get("pm25", 15))),
-                "relativehumidity": max(0, min(100, base.get("relativehumidity", latest_data.get("relativehumidity", 65)))),
-                "temperature": max(0, min(45, base.get("temperature", latest_data.get("temperature", 27)))),
-                "um003": max(0, base.get("um003", latest_data.get("um003", 300))),
-            }
-        else:
-            # Fallback kalau data historis belum cukup: persistence dari data terakhir
-            future = {
-                "timestamp": future_time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "pm1": latest_data.get("pm1", 10),
-                "pm25": latest_data.get("pm25", 15),
-                "relativehumidity": latest_data.get("relativehumidity", 65),
-                "temperature": latest_data.get("temperature", 27),
-                "um003": latest_data.get("um003", 300),
-            }
-
-        future["category"] = predict(spark, model, future)
-        future_data.append(future)
-    
-    df_future = pd.DataFrame(future_data)
-    df_future['timestamp'] = pd.to_datetime(df_future['timestamp'], utc=True).dt.tz_localize(None)
-
-    render_hourly_strip(df_future, "Prediksi 24 Jam Ke Depan (WIB)", key_prefix="future", page_size=8)
-    
-    # ============ RINGKASAN ============
-    st.markdown("---")
-    st.subheader("📋 Ringkasan")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Kondisi Saat Ini", latest_data.get("category", "Baik"))
-    with col2:
-        st.metric("PM2.5 Saat Ini", f"{latest_data.get('pm25', 0):.1f} µg/m³")
-    with col3:
-        pred_12h = df_future.head(12)['category'].mode()[0] if not df_future.head(12)['category'].empty else "N/A"
-        st.metric("Prediksi 12 Jam", pred_12h)
-    with col4:
-        pred_24h = df_future['category'].mode()[0] if not df_future['category'].empty else "N/A"
-        st.metric("Prediksi 24 Jam", pred_24h)
-    
-    st.info(f"""
-    📊 **Informasi Data**
-    - Sumber: OpenAQ API v3
-    - Lokasi: {LOCATION['name']}
-    - Parameter: PM2.5, PM1, Suhu, Kelembapan, um003
-    - Data terakhir: {ts_display}
-    - Update berikutnya: +1 jam
-    """)
-
-
-if __name__ == "__main__":
-    main()
+        with st.expander
