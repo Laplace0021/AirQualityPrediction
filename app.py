@@ -312,15 +312,22 @@ class OpenAQStream:
 
 
 def stream_worker():
-    """Worker streaming - fetch tepat setiap pergantian jam (:00)."""
+    """Worker streaming - update tepat setiap awal jam."""
 
     stream = OpenAQStream(OPENAQ_API_KEY)
 
+    # Tunggu sampai awal jam berikutnya
+    now = datetime.utcnow()
+    next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    sleep_seconds = (next_hour - now).total_seconds()
+
+    print(f"Worker started. First update at {next_hour} UTC")
+    time.sleep(sleep_seconds)
+
     while True:
         try:
-            now = datetime.utcnow()
+            print(f"Fetching at {datetime.utcnow()} UTC")
 
-            # Fetch hanya saat menit == 0
             recent, historical = stream.fetch_all_data()
 
             if recent:
@@ -334,22 +341,22 @@ def stream_worker():
                 global history_data
                 history_data = historical
 
-            # Hitung waktu menuju jam berikutnya
+            # Tunggu sampai awal jam berikutnya lagi
             now = datetime.utcnow()
-
-            next_hour = (
-                now.replace(minute=0, second=0, microsecond=0)
-                + timedelta(hours=1)
-            )
+            next_hour = now.replace(
+                minute=0,
+                second=0,
+                microsecond=0
+            ) + timedelta(hours=1)
 
             sleep_seconds = (next_hour - now).total_seconds()
 
-            print(f"Next fetch in {sleep_seconds:.0f} seconds")
+            print(f"Next update at {next_hour} UTC")
 
             time.sleep(sleep_seconds)
 
         except Exception as e:
-            print(e)
+            print("Stream Error:", e)
             time.sleep(60)
 
 
@@ -977,18 +984,15 @@ def main():
     # ============ HISTORIS PER JAM ============
     st.markdown('<div class="section-header"><span>📈</span> Historis 24 Jam</div>', unsafe_allow_html=True)
 
-    if history_data and len(history_data) > 0:
-        df_hist = pd.DataFrame(history_data)
-        # utc=True + tz_localize(None): samakan dengan get_anchor_data() supaya tidak
-        # crash "Invalid comparison" saat dibandingkan dengan anchor_ts/cutoff di bawah.
-        df_hist['timestamp'] = pd.to_datetime(df_hist['timestamp'], utc=True).dt.tz_localize(None)
-        df_hist = df_hist.sort_values('timestamp')
-
-        # Ambil 24 jam ke belakang berdasarkan anchor time (bukan max data historis)
-        anchor_ts = pd.to_datetime(latest_data["timestamp"])
-        cutoff = anchor_ts - timedelta(hours=24)
-        df_hist = df_hist[(df_hist['timestamp'] >= cutoff) & (df_hist['timestamp'] <= anchor_ts)].copy()
-
+    if not history_data:
+    with st.spinner("Mengambil data dari OpenAQ..."):
+        stream = OpenAQStream(OPENAQ_API_KEY)
+        stream.discover_sensors()
+        recent, historical = stream.fetch_all_data()
+        if recent:
+            recent_data = recent
+            history_data = historical
+            
         if len(df_hist) > 0:
             # Prediksi kategori untuk historis
             categories = []
