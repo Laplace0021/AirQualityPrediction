@@ -15,6 +15,8 @@ import requests
 import time
 from threading import Thread
 import queue
+from datetime import datetime, timedelta
+import time
 
 # Auto-detect JAVA_HOME
 if "JAVA_HOME" not in os.environ:
@@ -310,26 +312,44 @@ class OpenAQStream:
 
 
 def stream_worker():
-    """Worker streaming - jalan di background"""
+    """Worker streaming - fetch tepat setiap pergantian jam (:00)."""
+
     stream = OpenAQStream(OPENAQ_API_KEY)
-    
+
     while True:
         try:
-            # Fetch semua data sekaligus
+            now = datetime.utcnow()
+
+            # Fetch hanya saat menit == 0
             recent, historical = stream.fetch_all_data()
-            
+
             if recent:
                 if not data_queue.full():
                     data_queue.put(recent)
+
                 global recent_data
                 recent_data = recent
-            
+
             if historical:
                 global history_data
                 history_data = historical
-            
-            time.sleep(3600)  # 1 jam
+
+            # Hitung waktu menuju jam berikutnya
+            now = datetime.utcnow()
+
+            next_hour = (
+                now.replace(minute=0, second=0, microsecond=0)
+                + timedelta(hours=1)
+            )
+
+            sleep_seconds = (next_hour - now).total_seconds()
+
+            print(f"Next fetch in {sleep_seconds:.0f} seconds")
+
+            time.sleep(sleep_seconds)
+
         except Exception as e:
+            print(e)
             time.sleep(60)
 
 
