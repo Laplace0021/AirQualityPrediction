@@ -1062,8 +1062,8 @@ def main():
     with col2:
         st.metric("PM2.5 Saat Ini", f"{latest_data.get('pm25', 0):.1f} µg/m³")
     with col3:
-        pred_24h = df_future.head(24)['category'].mode()[0] if not df_future.head(12)['category'].empty else "N/A"
-        st.metric("Prediksi 24 Jam", pred_24h)
+        pred_12h = df_future.head(12)['category'].mode()[0] if not df_future.head(12)['category'].empty else "N/A"
+        st.metric("Prediksi 12 Jam", pred_12h)
     with col4:
         pred_24h = df_future['category'].mode()[0] if not df_future['category'].empty else "N/A"
         st.metric("Prediksi 24 Jam", pred_24h)
