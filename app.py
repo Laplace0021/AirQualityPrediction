@@ -984,14 +984,17 @@ def main():
     # ============ HISTORIS PER JAM ============
     st.markdown('<div class="section-header"><span>📈</span> Historis 24 Jam</div>', unsafe_allow_html=True)
 
-    if not history_data:
-        with st.spinner("Mengambil data dari OpenAQ..."):
-            stream = OpenAQStream(OPENAQ_API_KEY)
-            stream.discover_sensors()
-            recent, historical = stream.fetch_all_data()
-            if recent:
-                recent_data = recent
-                history_data = historical
+    # Fetch pertama agar dashboard langsung tampil
+if not history_data:
+    with st.spinner("Mengambil data dari OpenAQ..."):
+        stream = OpenAQStream(OPENAQ_API_KEY)
+        stream.discover_sensors()
+
+        recent, historical = stream.fetch_all_data()
+
+        if recent:
+            recent_data = recent
+            history_data = historical
             
         if len(df_hist) > 0:
             # Prediksi kategori untuk historis
