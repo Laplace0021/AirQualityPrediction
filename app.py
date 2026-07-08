@@ -898,15 +898,18 @@ def main():
     while not data_queue.empty():
         data_queue.get()
 
-    # Jika history_data masih kosong, fetch langsung dulu
+    # Tunggu hasil fetch pertama dari thread
     if not history_data:
         with st.spinner("Mengambil data dari OpenAQ..."):
-            stream = OpenAQStream(OPENAQ_API_KEY)
-            stream.discover_sensors()
-            recent, historical = stream.fetch_all_data()
-            if recent:
-                recent_data = recent
-                history_data = historical
+            timeout = 30  # maksimal tunggu 30 detik
+            start = time.time()
+    
+            while not history_data and (time.time() - start) < timeout:
+                time.sleep(0.5)
+    
+        if not history_data:
+            st.warning("⚠️ Belum ada data dari OpenAQ.")
+            st.stop()
 
     # Anchor time: pilih data historis paling dekat dengan jam sekarang
     # (bukan sekadar data[-1] dari API, karena OpenAQ tidak selalu update tepat waktu)
