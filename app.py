@@ -357,8 +357,29 @@ def load_model():
     return spark, model
 
 
+def sanitize_features(data):
+    """
+    Pastikan semua kolom fitur (FEATURES) numerik dan tidak ada NaN/None
+    sebelum dikirim ke Spark. VectorAssembler pada pipeline model defaultnya
+    handleInvalid="error", jadi satu nilai NaN saja bisa bikin transform()
+    gagal dengan IllegalArgumentException (pesannya sering "redacted" di
+    Streamlit Cloud sehingga terlihat kosong seperti di screenshot).
+    """
+    clean = dict(data)
+    defaults = {"pm1": 0.0, "relativehumidity": 65.0, "temperature": 27.0, "um003": 0.0}
+    for col in FEATURES:
+        val = clean.get(col)
+        if val is None or (isinstance(val, float) and np.isnan(val)):
+            val = defaults.get(col, 0.0)
+        clean[col] = float(val)
+    return clean
+
+
 def predict(spark, model, data):
-    pdf = pd.DataFrame([data])
+    clean_data = sanitize_features(data)
+    pdf = pd.DataFrame([clean_data])
+    for col in FEATURES:
+        pdf[col] = pdf[col].astype(float)
     sdf = spark.createDataFrame(pdf)
     result = model.transform(sdf)
     labels = model.stages[0].labelsArray[0]
