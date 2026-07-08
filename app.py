@@ -310,38 +310,27 @@ class OpenAQStream:
 
 
 def stream_worker():
-    """Worker streaming - jalan di background, fetch tepat di menit :00 tiap jam"""
+    """Worker streaming - jalan di background"""
     stream = OpenAQStream(OPENAQ_API_KEY)
-
+    
     while True:
         try:
             # Fetch semua data sekaligus
             recent, historical = stream.fetch_all_data()
-
+            
             if recent:
                 if not data_queue.full():
                     data_queue.put(recent)
                 global recent_data
                 recent_data = recent
-
+            
             if historical:
                 global history_data
                 history_data = historical
-
-        except Exception:
-            pass  # tetap lanjut ke perhitungan sleep di bawah walau fetch gagal
-
-        # Hitung jeda sampai ke jam bulat (:00) berikutnya, lalu tidur sampai saat itu.
-        # Ini yang membuat fetch berikutnya selalu tepat di :00, bukan "1 jam dari sekarang".
-        now = datetime.utcnow()
-        next_run = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-        sleep_seconds = (next_run - now).total_seconds()
-
-        # Jaga-jaga kalau sleep_seconds kecil sekali / negatif (edge case di sekitar menit ke-59:59)
-        if sleep_seconds < 5:
-            sleep_seconds += 3600
-
-        time.sleep(sleep_seconds)
+            
+            time.sleep(3600)  # 1 jam
+        except Exception as e:
+            time.sleep(60)
 
 
 @st.cache_resource
@@ -357,29 +346,8 @@ def load_model():
     return spark, model
 
 
-def sanitize_features(data):
-    """
-    Pastikan semua kolom fitur (FEATURES) numerik dan tidak ada NaN/None
-    sebelum dikirim ke Spark. VectorAssembler pada pipeline model defaultnya
-    handleInvalid="error", jadi satu nilai NaN saja bisa bikin transform()
-    gagal dengan IllegalArgumentException (pesannya sering "redacted" di
-    Streamlit Cloud sehingga terlihat kosong seperti di screenshot).
-    """
-    clean = dict(data)
-    defaults = {"pm1": 0.0, "relativehumidity": 65.0, "temperature": 27.0, "um003": 0.0}
-    for col in FEATURES:
-        val = clean.get(col)
-        if val is None or (isinstance(val, float) and np.isnan(val)):
-            val = defaults.get(col, 0.0)
-        clean[col] = float(val)
-    return clean
-
-
 def predict(spark, model, data):
-    clean_data = sanitize_features(data)
-    pdf = pd.DataFrame([clean_data])
-    for col in FEATURES:
-        pdf[col] = pdf[col].astype(float)
+    pdf = pd.DataFrame([data])
     sdf = spark.createDataFrame(pdf)
     result = model.transform(sdf)
     labels = model.stages[0].labelsArray[0]
@@ -1094,8 +1062,8 @@ def main():
     with col2:
         st.metric("PM2.5 Saat Ini", f"{latest_data.get('pm25', 0):.1f} µg/m³")
     with col3:
-        pred_12h = df_future.head(12)['category'].mode()[0] if not df_future.head(12)['category'].empty else "N/A"
-        st.metric("Prediksi 12 Jam", pred_12h)
+        pred_24h = df_future.head(24)['category'].mode()[0] if not df_future.head(12)['category'].empty else "N/A"
+        st.metric("Prediksi 24 Jam", pred_24h)
     with col4:
         pred_24h = df_future['category'].mode()[0] if not df_future['category'].empty else "N/A"
         st.metric("Prediksi 24 Jam", pred_24h)
