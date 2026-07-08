@@ -15,8 +15,6 @@ import requests
 import time
 from threading import Thread
 import queue
-from datetime import datetime, timedelta
-import time
 
 # Auto-detect JAVA_HOME
 if "JAVA_HOME" not in os.environ:
@@ -312,28 +310,17 @@ class OpenAQStream:
 
 
 def stream_worker():
-    """Worker streaming - update tepat setiap awal jam."""
-
+    """Worker streaming - jalan di background, fetch tepat di menit :00 tiap jam"""
     stream = OpenAQStream(OPENAQ_API_KEY)
-
-    # Tunggu sampai awal jam berikutnya
-    now = datetime.utcnow()
-    next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-    sleep_seconds = (next_hour - now).total_seconds()
-
-    print(f"Worker started. First update at {next_hour} UTC")
-    time.sleep(sleep_seconds)
 
     while True:
         try:
-            print(f"Fetching at {datetime.utcnow()} UTC")
-
+            # Fetch semua data sekaligus
             recent, historical = stream.fetch_all_data()
 
             if recent:
                 if not data_queue.full():
                     data_queue.put(recent)
-
                 global recent_data
                 recent_data = recent
 
@@ -341,23 +328,20 @@ def stream_worker():
                 global history_data
                 history_data = historical
 
-            # Tunggu sampai awal jam berikutnya lagi
-            now = datetime.utcnow()
-            next_hour = now.replace(
-                minute=0,
-                second=0,
-                microsecond=0
-            ) + timedelta(hours=1)
+        except Exception:
+            pass  # tetap lanjut ke perhitungan sleep di bawah walau fetch gagal
 
-            sleep_seconds = (next_hour - now).total_seconds()
+        # Hitung jeda sampai ke jam bulat (:00) berikutnya, lalu tidur sampai saat itu.
+        # Ini yang membuat fetch berikutnya selalu tepat di :00, bukan "1 jam dari sekarang".
+        now = datetime.utcnow()
+        next_run = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+        sleep_seconds = (next_run - now).total_seconds()
 
-            print(f"Next update at {next_hour} UTC")
+        # Jaga-jaga kalau sleep_seconds kecil sekali / negatif (edge case di sekitar menit ke-59:59)
+        if sleep_seconds < 5:
+            sleep_seconds += 3600
 
-            time.sleep(sleep_seconds)
-
-        except Exception as e:
-            print("Stream Error:", e)
-            time.sleep(60)
+        time.sleep(sleep_seconds)
 
 
 @st.cache_resource
@@ -905,18 +889,15 @@ def main():
     while not data_queue.empty():
         data_queue.get()
 
-    # Tunggu hasil fetch pertama dari thread
+    # Jika history_data masih kosong, fetch langsung dulu
     if not history_data:
         with st.spinner("Mengambil data dari OpenAQ..."):
-            timeout = 30  # maksimal tunggu 30 detik
-            start = time.time()
-    
-            while not history_data and (time.time() - start) < timeout:
-                time.sleep(0.5)
-    
-        if not history_data:
-            st.warning("⚠️ Belum ada data dari OpenAQ.")
-            st.stop()
+            stream = OpenAQStream(OPENAQ_API_KEY)
+            stream.discover_sensors()
+            recent, historical = stream.fetch_all_data()
+            if recent:
+                recent_data = recent
+                history_data = historical
 
     # Anchor time: pilih data historis paling dekat dengan jam sekarang
     # (bukan sekadar data[-1] dari API, karena OpenAQ tidak selalu update tepat waktu)
@@ -984,18 +965,18 @@ def main():
     # ============ HISTORIS PER JAM ============
     st.markdown('<div class="section-header"><span>📈</span> Historis 24 Jam</div>', unsafe_allow_html=True)
 
-    # Fetch pertama agar dashboard langsung tampil
-    if not history_data:
-        with st.spinner("Mengambil data dari OpenAQ..."):
-            stream = OpenAQStream(OPENAQ_API_KEY)
-            stream.discover_sensors()
-    
-            recent, historical = stream.fetch_all_data()
+    if history_data and len(history_data) > 0:
+        df_hist = pd.DataFrame(history_data)
+        # utc=True + tz_localize(None): samakan dengan get_anchor_data() supaya tidak
+        # crash "Invalid comparison" saat dibandingkan dengan anchor_ts/cutoff di bawah.
+        df_hist['timestamp'] = pd.to_datetime(df_hist['timestamp'], utc=True).dt.tz_localize(None)
+        df_hist = df_hist.sort_values('timestamp')
 
-        if recent:
-            recent_data = recent
-            history_data = historical
-            
+        # Ambil 24 jam ke belakang berdasarkan anchor time (bukan max data historis)
+        anchor_ts = pd.to_datetime(latest_data["timestamp"])
+        cutoff = anchor_ts - timedelta(hours=24)
+        df_hist = df_hist[(df_hist['timestamp'] >= cutoff) & (df_hist['timestamp'] <= anchor_ts)].copy()
+
         if len(df_hist) > 0:
             # Prediksi kategori untuk historis
             categories = []
